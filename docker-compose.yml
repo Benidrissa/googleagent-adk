@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - POSTGRES_URL=postgresql://postgres:password@postgres:5432/pregnancy_db
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    networks:
+      - pregnancy-net
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - pregnancy-net
+  
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=pregnancy_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - pregnancy-net
+  
+  mcp_server:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/pregnancy_records
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - pregnancy-net
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  pregnancy-net:
+    driver: bridge
