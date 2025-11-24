@@ -49,6 +49,9 @@ pregnancy_records: Dict[str, Dict[str, Any]] = {
     }
 }
 
+# In-memory storage for conversation summaries
+conversation_summaries: Dict[str, List[Dict[str, Any]]] = {}  # Keyed by phone number
+
 # Load schema
 SCHEMA_PATH = Path(__file__).parent / "pregnancy_schema.json"
 with open(SCHEMA_PATH, 'r') as f:
@@ -178,6 +181,54 @@ async def list_tools() -> List[Tool]:
                 },
                 "required": ["phone", "confirm"]
             }
+        ),
+        Tool(
+            name="store_conversation_summary",
+            description="Store a conversation summary for a patient",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session identifier"
+                    },
+                    "user_id": {
+                        "type": "string",
+                        "description": "User identifier"
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "Patient's phone number"
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Conversation summary text"
+                    },
+                    "start_turn": {
+                        "type": "integer",
+                        "description": "Starting turn number"
+                    },
+                    "end_turn": {
+                        "type": "integer",
+                        "description": "Ending turn number"
+                    }
+                },
+                "required": ["session_id", "user_id", "phone", "summary", "start_turn", "end_turn"]
+            }
+        ),
+        Tool(
+            name="get_conversation_summaries",
+            description="Retrieve all conversation summaries for a patient",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "phone": {
+                        "type": "string",
+                        "description": "Patient's phone number"
+                    }
+                },
+                "required": ["phone"]
+            }
         )
     ]
 
@@ -195,6 +246,10 @@ async def call_tool(name: str, arguments: Any) -> List[TextContent]:
         return await update_anc_visit(arguments)
     elif name == "delete_pregnancy_record":
         return await delete_pregnancy_record(arguments)
+    elif name == "store_conversation_summary":
+        return await store_conversation_summary(arguments)
+    elif name == "get_conversation_summaries":
+        return await get_conversation_summaries(arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -384,6 +439,74 @@ async def delete_pregnancy_record(arguments: Dict[str, Any]) -> List[TextContent
                 "message": f"No record found for phone: {phone}"
             }, indent=2)
         )]
+
+async def store_conversation_summary(arguments: Dict[str, Any]) -> List[TextContent]:
+    """Store a conversation summary."""
+    session_id = arguments["session_id"]
+    user_id = arguments["user_id"]
+    phone = arguments["phone"]
+    summary = arguments["summary"]
+    start_turn = arguments["start_turn"]
+    end_turn = arguments["end_turn"]
+    
+    logger.info(f"Storing conversation summary for {phone} (turns {start_turn}-{end_turn})")
+    
+    # Initialize summaries list for this phone if not exists
+    if phone not in conversation_summaries:
+        conversation_summaries[phone] = []
+    
+    # Create summary record
+    summary_record = {
+        "id": len(conversation_summaries[phone]) + 1,
+        "session_id": session_id,
+        "user_id": user_id,
+        "phone": phone,
+        "summary": summary,
+        "start_turn": start_turn,
+        "end_turn": end_turn,
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+    
+    # Store summary
+    conversation_summaries[phone].append(summary_record)
+    
+    return [TextContent(
+        type="text",
+        text=json.dumps({
+            "status": "success",
+            "message": f"Summary stored successfully (ID: {summary_record['id']})",
+            "summary_id": summary_record['id'],
+            "phone": phone,
+            "turns_summarized": f"{start_turn}-{end_turn}"
+        }, indent=2)
+    )]
+
+async def get_conversation_summaries(arguments: Dict[str, Any]) -> List[TextContent]:
+    """Retrieve all conversation summaries for a patient."""
+    phone = arguments["phone"]
+    
+    logger.info(f"Retrieving conversation summaries for {phone}")
+    
+    if phone not in conversation_summaries or not conversation_summaries[phone]:
+        return [TextContent(
+            type="text",
+            text=json.dumps({
+                "status": "success",
+                "message": f"No summaries found for {phone}",
+                "summaries": []
+            }, indent=2)
+        )]
+    
+    summaries = conversation_summaries[phone]
+    
+    return [TextContent(
+        type="text",
+        text=json.dumps({
+            "status": "success",
+            "message": f"Found {len(summaries)} summaries for {phone}",
+            "summaries": summaries
+        }, indent=2)
+    )]
 
 async def main():
     """Run the MCP server."""
