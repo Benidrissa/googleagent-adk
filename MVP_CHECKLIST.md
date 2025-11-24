@@ -9,10 +9,10 @@
 
 ## 📊 Progress Overview
 
-- **Phase 1 (Critical MVP):** 4/16 🟡 IN PROGRESS
+- **Phase 1 (Critical MVP):** 5/16 🟡 IN PROGRESS
 - **Phase 2 (Architecture):** 0/7 ✗ NOT STARTED
 - **Phase 3 (Production):** 0/6 ✗ NOT STARTED
-- **Overall:** 4/29 (14%)
+- **Overall:** 5/29 (17%)
 
 ---
 
@@ -116,14 +116,14 @@
 
 ---
 
-### 1.2 MCP Server for Pregnancy Records ⬜ NOT STARTED
+### 1.2 MCP Server for Pregnancy Records 🟡 IN PROGRESS (1/5 items)
 
-#### 1.2.1 Design Pregnancy Data Schema ⬜
-- [ ] **Status:** Not Started
-- [ ] **Implemented:** No
-- [ ] **Tested:** No
-- [ ] **Validated:** No
-- [ ] **Committed:** No
+#### 1.2.1 Design Pregnancy Data Schema ✅ COMPLETE
+- [x] **Status:** ✅ COMPLETE
+- [x] **Implemented:** Yes - pregnancy_schema.json
+- [x] **Tested:** Yes - validate_schema.py passing
+- [x] **Validated:** ✅ USER APPROVED (2025-11-24)
+- [x] **Committed:** Yes - commit 7c6cba2
 - **Files to create/modify:**
   - `pregnancy_schema.json` - New file with data model
   - `ARCHITECTURE.md` - Document schema design
