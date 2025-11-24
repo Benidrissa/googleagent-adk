@@ -37,9 +37,11 @@ from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
-from google.adk.tools import google_search
+from google.adk.tools import google_search, AgentTool
+from google.adk.tools.mcp_tool import McpToolset
 from google.genai import types
 from google.genai.types import HarmCategory, HarmBlockThreshold
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
 # --- CONFIGURATION ---
 # Set up logging (ADK best practice)
@@ -1017,11 +1019,48 @@ logger.info("✅ Nurse Agent created for risk assessment")
 
 
 # ============================================================================
+# MCP PREGNANCY RECORD TOOLSET
+# ============================================================================
+
+# Create MCP toolset to connect to pregnancy record server
+try:
+    from mcp.client.stdio import StdioConnectionParams
+    pregnancy_mcp = McpToolset(
+        connection_params=StdioConnectionParams(
+            server_params=StdioServerParameters(
+                command='python3',
+                args=['pregnancy_mcp_server.py']
+            )
+        )
+    )
+    logger.info("✅ Pregnancy MCP Toolset created")
+except Exception as e:
+    logger.error(f"Failed to create MCP toolset: {e}")
+    pregnancy_mcp = None
+
+
+# ============================================================================
 # MAIN PREGNANCY COMPANION AGENT
 # ============================================================================
 
-# Import AgentTool to use nurse_agent as a tool
-from google.adk.tools import AgentTool
+# Build tools list conditionally based on MCP availability
+agent_tools = [
+    calculate_edd,
+    calculate_anc_schedule,  # WHO-based ANC visit schedule
+    infer_country_from_location,
+    assess_road_accessibility,
+    get_local_health_facilities,  # MCP-style offline facility lookup
+]
+
+# Add MCP toolset if available
+if pregnancy_mcp is not None:
+    agent_tools.append(pregnancy_mcp)
+    logger.info("✅ MCP toolset added to agent tools")
+else:
+    logger.warning("⚠️  MCP toolset not available, pregnancy records will not persist")
+
+# Always add nurse agent
+agent_tools.append(AgentTool(agent=nurse_agent))
 
 # Create the main Pregnancy Companion Agent with enhanced location and search capabilities
 root_agent = LlmAgent(
@@ -1039,10 +1078,11 @@ location-based assistance, and nutrition research.
 OPERATIONAL PROTOCOL:
 
 1. **Patient Identification & Profile**:
-   - Check if you know the patient (Name, Age, LMP, Country, Location)
+   - Check if you know the patient using get_pregnancy_by_phone tool (phone number is unique identifier)
+   - If patient not found, collect: Name, Age, Phone, LMP, Country, Location
    - If location/country is missing, ask politely: "Where are you located so I can provide local information?"
    - If country is not provided but location is, use infer_country_from_location tool
-   - Store location and country in patient profile for future reference
+   - Store/update patient information using upsert_pregnancy_record tool
    - Use simple language - avoid medical jargon, acronyms, and complex terms
 
 2. **Calculate EDD (Due Date)**:
@@ -1099,14 +1139,7 @@ OPERATIONAL PROTOCOL:
 
 REMEMBER: You are a support companion, not a replacement for medical care.
 """,
-    tools=[
-        calculate_edd,
-        calculate_anc_schedule,  # WHO-based ANC visit schedule
-        infer_country_from_location,
-        assess_road_accessibility,
-        get_local_health_facilities,  # MCP-style offline facility lookup
-        AgentTool(agent=nurse_agent)  # Nurse agent as a tool for risk assessment
-    ],
+    tools=agent_tools,
     generate_content_config=types.GenerateContentConfig(
         temperature=0.7,  # Balanced for friendly yet consistent responses
         max_output_tokens=1024,
