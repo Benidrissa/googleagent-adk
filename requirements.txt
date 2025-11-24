@@ -1,0 +1,12 @@
+# Google Agent Development Kit
+google-adk>=1.19.0
+
+# Core dependencies (installed with ADK)
+google-genai>=1.0.0
+pydantic>=2.0.0
+
+# Optional: For loading environment variables
+python-dotenv>=1.0.0
+
+# Optional: For enhanced async support
+aiohttp>=3.9.0
