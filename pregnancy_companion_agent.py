@@ -18,6 +18,9 @@ import datetime
 import json
 import requests
 import asyncio
+import sqlite3
+import pickle
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Union
 
 # Load environment variables from .env file
@@ -121,6 +124,241 @@ APP_NAME = "pregnancy_companion"
 DEFAULT_USER_ID = "patient_user"
 
 logger.info("✅ Pregnancy Companion Agent initialized")
+
+# ============================================================================
+# DATABASE-BACKED MEMORY SERVICE
+# ============================================================================
+
+class DatabaseMemoryService(InMemoryMemoryService):
+    """
+    Persistent memory service using SQLite database.
+    Extends InMemoryMemoryService and adds database persistence.
+    
+    Stores sessions in database for persistence across restarts.
+    """
+    
+    def __init__(self, db_path: str = "pregnancy_agent_memory.db"):
+        """Initialize database-backed memory service."""
+        super().__init__()  # Initialize parent InMemoryMemoryService
+        self.db_path = Path(db_path)
+        self._session_cache = {}  # Cache sessions: {(app_name, user_id, session_id): Session}
+        self._init_database()
+        self._load_sessions_from_database()  # Load existing sessions on startup
+        logger.info(f"✅ Database Memory Service initialized: {self.db_path.absolute()}")
+    
+    def _init_database(self):
+        """Create database schema if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_name TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                session_data BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(app_name, user_id, session_id)
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_user_sessions 
+            ON sessions(app_name, user_id)
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
+    def _load_sessions_from_database(self):
+        """Load existing sessions from database on startup."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        count = 0
+        try:
+            cursor.execute('SELECT app_name, user_id, session_id, session_data FROM sessions')
+            for row in cursor.fetchall():
+                app_name, user_id, session_id, session_data = row
+                try:
+                    session = pickle.loads(session_data)
+                    # Cache locally - will be added to parent's memory when first accessed
+                    key = (app_name, user_id, session_id)
+                    self._session_cache[key] = session
+                    count += 1
+                except Exception as e:
+                    logger.error(f"Error loading session from database: {e}")
+            
+            if count > 0:
+                logger.info(f"📚 Loaded {count} sessions from database (will sync to memory on first use)")
+        except Exception as e:
+            logger.error(f"Error reading from database: {e}")
+        finally:
+            conn.close()
+    
+    async def _restore_cached_sessions(self):
+        """Restore cached sessions to parent's in-memory storage."""
+        for key, session in self._session_cache.items():
+            try:
+                await super().add_session_to_memory(session)
+            except Exception as e:
+                logger.error(f"Error restoring session {key}: {e}")
+    
+    async def add_session_to_memory(self, session):
+        """Add session to memory and persist to database."""
+        # First, use parent's in-memory storage
+        await super().add_session_to_memory(session)
+        
+        # Cache locally
+        key = (session.app_name, session.user_id, session.id)
+        self._session_cache[key] = session
+        
+        # Then persist to database
+        self._persist_session(session)
+    
+    def _persist_session(self, session):
+        """Persist session to database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Pickle the entire session object
+            session_data = pickle.dumps(session)
+            
+            cursor.execute('''
+                INSERT OR REPLACE INTO sessions 
+                (app_name, user_id, session_id, session_data, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (session.app_name, session.user_id, session.id, session_data))
+            
+            conn.commit()
+            logger.debug(f"💾 Persisted session to database: {session.user_id}/{session.id}")
+        except Exception as e:
+            logger.error(f"Error persisting session to database: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+    
+    def clear_user_memory(self, app_name: str, user_id: str):
+        """Clear memory for a user from both in-memory and database."""
+        # Clear from cache
+        keys_to_delete = [k for k in self._session_cache.keys() 
+                         if k[0] == app_name and k[1] == user_id]
+        for key in keys_to_delete:
+            del self._session_cache[key]
+        
+        # Clear from database
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'DELETE FROM sessions WHERE app_name = ? AND user_id = ?',
+                (app_name, user_id)
+            )
+            conn.commit()
+            logger.info(f"🗑️  Cleared sessions for user {user_id}")
+        finally:
+            conn.close()
+    
+    async def search_memory(self, app_name: str, user_id: str, query: str):
+        """
+        Search stored sessions for relevant memories.
+        
+        Implements keyword-based search across all user sessions stored in database.
+        Extracts text from session events and matches against query keywords.
+        
+        Args:
+            app_name: Application name
+            user_id: User identifier
+            query: Search query string
+            
+        Returns:
+            SearchMemoryResponse with matching memories
+        """
+        from google.adk.memory.base_memory_service import SearchMemoryResponse
+        from google.adk.memory.memory_entry import MemoryEntry
+        from google.genai.types import Content, Part
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        matching_memories = []
+        query_lower = query.lower()
+        query_keywords = set(query_lower.split())
+        
+        try:
+            # Retrieve all sessions for this user
+            cursor.execute(
+                'SELECT session_id, session_data FROM sessions WHERE app_name = ? AND user_id = ?',
+                (app_name, user_id)
+            )
+            
+            for row in cursor.fetchall():
+                session_id, session_data = row
+                try:
+                    session = pickle.loads(session_data)
+                    
+                    # Extract text from session events
+                    for event in session.events:
+                        if event.content and event.content.parts:
+                            for part in event.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    text_lower = part.text.lower()
+                                    
+                                    # Check if any query keywords match
+                                    if any(keyword in text_lower for keyword in query_keywords):
+                                        # Create a memory entry for this event
+                                        memory_content = Content(
+                                            role=event.content.role,
+                                            parts=[Part(text=part.text)]
+                                        )
+                                        
+                                        # Create proper ADK MemoryEntry
+                                        memory = MemoryEntry(
+                                            content=memory_content,
+                                            author=event.content.role
+                                        )
+                                        matching_memories.append(memory)
+                                        break  # Only add one memory per event
+                
+                except Exception as e:
+                    logger.error(f"Error processing session {session_id}: {e}")
+            
+            logger.info(f"🔍 Found {len(matching_memories)} memories matching query: '{query}'")
+            
+        except Exception as e:
+            logger.error(f"Error searching memories: {e}")
+        finally:
+            conn.close()
+        
+        # Return SearchMemoryResponse
+        return SearchMemoryResponse(memories=matching_memories)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get database statistics."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('SELECT COUNT(*) FROM sessions')
+            total = cursor.fetchone()[0]
+            
+            cursor.execute('SELECT COUNT(DISTINCT user_id) FROM sessions')
+            users = cursor.fetchone()[0]
+            
+            return {
+                "total_sessions": total,
+                "unique_users": users,
+                "cached_sessions": len(self._session_cache),
+                "database_path": str(self.db_path.absolute()),
+                "database_size_kb": self.db_path.stat().st_size / 1024 if self.db_path.exists() else 0
+            }
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            conn.close()
 
 # ============================================================================
 # TOOLS SECTION - ADK Function Tools
@@ -891,7 +1129,7 @@ async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
 
 # Initialize ADK services
 session_service = InMemorySessionService()
-memory_service = InMemoryMemoryService()
+memory_service = DatabaseMemoryService(db_path="pregnancy_agent_memory.db")
 
 # Create the Runner - this orchestrates agent execution
 runner = Runner(
@@ -901,7 +1139,7 @@ runner = Runner(
     memory_service=memory_service
 )
 
-logger.info("✅ Runner initialized with session and memory services")
+logger.info("✅ Runner initialized with PERSISTENT DATABASE memory service")
 
 # ============================================================================
 # HELPER FUNCTIONS
