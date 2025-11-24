@@ -17,7 +17,8 @@ import logging
 import datetime
 import json
 import requests
-from typing import Dict, Any, Optional, List
+import asyncio
+from typing import Dict, Any, Optional, List, Union
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -34,6 +35,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# OpenTelemetry for advanced observability (optional enhancement)
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+    
+    # Initialize tracer
+    trace.set_tracer_provider(TracerProvider())
+    trace.get_tracer_provider().add_span_processor(
+        SimpleSpanProcessor(ConsoleSpanExporter())
+    )
+    tracer = trace.get_tracer(__name__)
+    TRACING_ENABLED = True
+    logger.info("✅ OpenTelemetry tracing enabled")
+except ImportError:
+    TRACING_ENABLED = False
+    tracer = None
+    logger.info("ℹ️  OpenTelemetry not available, running without tracing")
+
 # Get API keys from environment
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
 if GOOGLE_API_KEY == "YOUR_API_KEY_HERE":
@@ -46,6 +66,31 @@ if GOOGLE_MAPS_API_KEY == "YOUR_API_KEY_HERE":
 
 MODEL_NAME = "gemini-2.0-flash-exp"
 
+# Session state keys for pause/resume functionality
+STATE_PAUSED = "consultation_paused"
+STATE_PAUSE_REASON = "pause_reason"
+STATE_PAUSE_TIMESTAMP = "pause_timestamp"
+STATE_LAST_TOPIC = "last_discussed_topic"
+STATE_PENDING_ACTIONS = "pending_actions"
+
+# MCP Health Facility Cache (simulated local database)
+LOCAL_HEALTH_FACILITIES = {
+    "Bamako": [
+        {"name": "Hospital Gabriel Touré", "address": "Rue 40, Bamako", "type": "general", "rating": 4.2, "emergency": True},
+        {"name": "Point G Hospital", "address": "Colline du Point G, Bamako", "type": "general", "rating": 4.0, "emergency": True},
+        {"name": "Centre de Santé Communautaire", "address": "Avenue Moussa Tavele", "type": "clinic", "rating": 3.8, "emergency": False}
+    ],
+    "Accra": [
+        {"name": "Ridge Hospital", "address": "Castle Road, Ridge, Accra", "type": "general", "rating": 4.3, "emergency": True},
+        {"name": "37 Military Hospital", "address": "Liberation Road, Accra", "type": "military", "rating": 4.5, "emergency": True},
+        {"name": "Korle Bu Teaching Hospital", "address": "Guggisberg Avenue, Accra", "type": "teaching", "rating": 4.1, "emergency": True}
+    ],
+    "Lagos": [
+        {"name": "Lagos University Teaching Hospital", "address": "Idi-Araba, Lagos", "type": "teaching", "rating": 4.0, "emergency": True},
+        {"name": "Lagos Island Maternity Hospital", "address": "Broad Street, Lagos Island", "type": "maternity", "rating": 3.9, "emergency": True}
+    ]
+}
+
 # --- APPLICATION CONSTANTS ---
 APP_NAME = "pregnancy_companion"
 DEFAULT_USER_ID = "patient_user"
@@ -55,6 +100,65 @@ logger.info("✅ Pregnancy Companion Agent initialized")
 # ============================================================================
 # TOOLS SECTION - ADK Function Tools
 # ============================================================================
+
+def get_local_health_facilities(city: str, facility_type: str = "all") -> Dict[str, Any]:
+    """
+    Get health facilities from local MCP-style database (offline-capable).
+    This simulates an MCP (Model Context Protocol) server providing local data.
+    
+    Args:
+        city: City name to search in
+        facility_type: Type filter ("all", "emergency", "maternity", "clinic")
+        
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - facilities: List of local health facilities
+            - source: "local_mcp" to indicate offline capability
+            - count: Number of facilities found
+    """
+    try:
+        # Search local database (MCP-style)
+        city_key = None
+        for key in LOCAL_HEALTH_FACILITIES.keys():
+            if key.lower() in city.lower() or city.lower() in key.lower():
+                city_key = key
+                break
+        
+        if not city_key:
+            return {
+                "status": "error",
+                "error_message": f"No local data available for {city}. Try nearby cities.",
+                "available_cities": list(LOCAL_HEALTH_FACILITIES.keys())
+            }
+        
+        facilities = LOCAL_HEALTH_FACILITIES[city_key]
+        
+        # Filter by type if specified
+        if facility_type != "all":
+            if facility_type == "emergency":
+                facilities = [f for f in facilities if f.get("emergency", False)]
+            else:
+                facilities = [f for f in facilities if f.get("type") == facility_type]
+        
+        logger.info(f"Retrieved {len(facilities)} local facilities for {city} (MCP source)")
+        
+        return {
+            "status": "success",
+            "facilities": facilities,
+            "source": "local_mcp",
+            "count": len(facilities),
+            "city": city_key,
+            "offline_capable": True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error accessing local facility database: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Database error: {str(e)}"
+        }
+
 
 def calculate_edd(lmp_date: str) -> Dict[str, Any]:
     """
@@ -401,7 +505,7 @@ Always respond with a clear JSON structure:
 
 Be professional, compassionate, and always prioritize patient safety.
 """,
-    tools=[google_search, find_nearby_health_facilities],
+    tools=[google_search, find_nearby_health_facilities, get_local_health_facilities],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2,  # Lower temperature for more consistent medical assessments
         safety_settings=[
@@ -503,6 +607,7 @@ REMEMBER: You are a support companion, not a replacement for medical care.
         calculate_edd,
         infer_country_from_location,
         assess_road_accessibility,
+        get_local_health_facilities,  # MCP-style offline facility lookup
         google_search,
         AgentTool(agent=nurse_agent)  # Nurse agent as a tool for risk assessment
     ],
@@ -519,6 +624,111 @@ REMEMBER: You are a support companion, not a replacement for medical care.
 )
 
 logger.info("✅ Pregnancy Companion Agent created")
+
+
+# ============================================================================
+# PAUSE/RESUME FUNCTIONALITY - Long-running Operations Support
+# ============================================================================
+
+async def pause_consultation(session_id: str, user_id: str, reason: str, last_topic: str = "") -> Dict[str, Any]:
+    """
+    Pause an ongoing consultation for later resumption.
+    Useful for long consultations that span multiple interactions.
+    
+    Args:
+        session_id: Session identifier
+        user_id: User identifier
+        reason: Reason for pausing (e.g., "patient_busy", "awaiting_test_results")
+        last_topic: Last discussed topic for context
+        
+    Returns:
+        dict: Status of pause operation
+    """
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        if session:
+            # Update session state with pause information
+            session.state[STATE_PAUSED] = True
+            session.state[STATE_PAUSE_REASON] = reason
+            session.state[STATE_PAUSE_TIMESTAMP] = datetime.datetime.now().isoformat()
+            session.state[STATE_LAST_TOPIC] = last_topic
+            
+            logger.info(f"Consultation paused: {session_id} - Reason: {reason}")
+            
+            return {
+                "status": "success",
+                "message": f"Consultation paused. Reason: {reason}",
+                "session_id": session_id,
+                "can_resume": True
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": "Session not found"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error pausing consultation: {e}")
+        return {
+            "status": "error",
+            "error_message": str(e)
+        }
+
+
+async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
+    """
+    Resume a paused consultation.
+    
+    Args:
+        session_id: Session identifier
+        user_id: User identifier
+        
+    Returns:
+        dict: Status and context for resumption
+    """
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        if session and session.state.get(STATE_PAUSED, False):
+            pause_reason = session.state.get(STATE_PAUSE_REASON, "unknown")
+            pause_time = session.state.get(STATE_PAUSE_TIMESTAMP, "")
+            last_topic = session.state.get(STATE_LAST_TOPIC, "")
+            
+            # Clear pause state
+            session.state[STATE_PAUSED] = False
+            
+            logger.info(f"Consultation resumed: {session_id}")
+            
+            return {
+                "status": "success",
+                "message": "Consultation resumed",
+                "session_id": session_id,
+                "was_paused_reason": pause_reason,
+                "pause_duration": pause_time,
+                "last_topic": last_topic,
+                "resume_context": f"Welcome back! We were discussing: {last_topic}" if last_topic else "Welcome back!"
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": "Session not paused or not found"
+            }
+            
+    except Exception as e:
+        logger.error(f"Error resuming consultation: {e}")
+        return {
+            "status": "error",
+            "error_message": str(e)
+        }
 
 
 # ============================================================================
@@ -546,6 +756,7 @@ logger.info("✅ Runner initialized with session and memory services")
 async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID, session_id: Optional[str] = None):
     """
     Run a single agent interaction with proper ADK patterns.
+    Now includes OpenTelemetry tracing and pause/resume support.
     
     Args:
         user_input: The user's message
@@ -555,27 +766,58 @@ async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID,
     Returns:
         str: The agent's final response
     """
-    # Create session if it doesn't exist
-    if session_id is None:
-        session_id = f"session_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        await session_service.create_session(
+    # Start tracing span if available
+    if TRACING_ENABLED and tracer:
+        span = tracer.start_span("agent_interaction")
+        span.set_attribute("user_id", user_id)
+        span.set_attribute("session_id", session_id or "new")
+        span.set_attribute("input_length", len(user_input))
+    else:
+        span = None
+    
+    try:
+        # Create session if it doesn't exist
+        if session_id is None:
+            session_id = f"session_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            await session_service.create_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=session_id
+            )
+            logger.info(f"Created new session: {session_id}")
+            if span:
+                span.add_event("session_created")
+        
+        # Check if session is paused and handle resumption
+        session = await session_service.get_session(
             app_name=APP_NAME,
             user_id=user_id,
             session_id=session_id
         )
-        logger.info(f"Created new session: {session_id}")
+        
+        if session and session.state.get(STATE_PAUSED, False):
+            resume_info = await resume_consultation(session_id, user_id)
+            if resume_info["status"] == "success":
+                logger.info(f"Resuming paused consultation: {session_id}")
+                if span:
+                    span.add_event("consultation_resumed")
+                # Prepend resume context to user input
+                user_input = f"[SYSTEM: {resume_info['resume_context']}]\n\nUser: {user_input}"
     
-    # Create user message
-    user_message = types.Content(
-        role='user',
-        parts=[types.Part(text=user_input)]
-    )
-    
-    # Run the agent
-    logger.info(f"User: {user_input}")
-    
-    final_response = ""
-    try:
+        # Create user message
+        user_message = types.Content(
+            role='user',
+            parts=[types.Part(text=user_input)]
+        )
+        
+        # Run the agent
+        logger.info(f"User: {user_input}")
+        if span:
+            span.add_event("agent_execution_started")
+        
+        final_response = ""
+        tool_calls = 0
+        
         async for event in runner.run_async(
             user_id=user_id,
             session_id=session_id,
@@ -586,11 +828,20 @@ async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID,
                 for part in event.content.parts:
                     if part.text:
                         logger.debug(f"[{event.author}] {part.text[:100]}...")
+                    # Track tool usage
+                    if hasattr(part, 'function_call') and part.function_call:
+                        tool_calls += 1
+                        if span:
+                            span.add_event(f"tool_call_{part.function_call.name}")
             
             # Capture final response
             if event.is_final_response() and event.content and event.content.parts:
                 final_response = ''.join(part.text or '' for part in event.content.parts)
                 logger.info(f"Agent: {final_response}")
+                if span:
+                    span.set_attribute("response_length", len(final_response))
+                    span.set_attribute("tool_calls", tool_calls)
+                    span.add_event("agent_execution_completed")
         
         # Add session to memory for future recall
         session = await session_service.get_session(
@@ -600,10 +851,17 @@ async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID,
         )
         await memory_service.add_session_to_memory(session)
         
+        if span:
+            span.end()
+        
         return final_response
         
     except Exception as e:
         logger.error(f"Error during agent interaction: {e}", exc_info=True)
+        if span:
+            span.set_attribute("error", True)
+            span.set_attribute("error_message", str(e))
+            span.end()
         return f"I apologize, but I encountered an error. Please try again or contact support if the issue persists."
 
 
