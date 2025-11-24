@@ -409,8 +409,7 @@ Be professional, compassionate, and always prioritize patient safety.
                 category=cat,
                 threshold=HarmBlockThreshold.BLOCK_NONE
             ) for cat in SAFETY_SETTINGS.keys()
-        ],
-        bypass_multi_tools_limit=True  # Allow google_search with custom tools
+        ]
     )
 )
 
@@ -515,8 +514,7 @@ REMEMBER: You are a support companion, not a replacement for medical care.
                 category=cat,
                 threshold=HarmBlockThreshold.BLOCK_NONE
             ) for cat in SAFETY_SETTINGS.keys()
-        ],
-        bypass_multi_tools_limit=True  # Allow google_search with custom tools
+        ]
     )
 )
 
