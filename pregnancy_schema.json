@@ -1,0 +1,273 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pregnancy Record Schema",
+  "description": "Data model for pregnancy records in the Pregnancy Companion Agent",
+  "type": "object",
+  "required": ["phone", "name", "lmp_date"],
+  "properties": {
+    "phone": {
+      "type": "string",
+      "description": "Patient's phone number (unique identifier)",
+      "pattern": "^\\+?[1-9]\\d{1,14}$",
+      "example": "+2347012345678"
+    },
+    "name": {
+      "type": "string",
+      "description": "Patient's full name",
+      "minLength": 2,
+      "maxLength": 100,
+      "example": "Amina Diallo"
+    },
+    "age": {
+      "type": "integer",
+      "description": "Patient's age in years",
+      "minimum": 10,
+      "maximum": 60,
+      "example": 28
+    },
+    "lmp_date": {
+      "type": "string",
+      "description": "Last Menstrual Period date",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "example": "2025-03-01"
+    },
+    "edd": {
+      "type": "string",
+      "description": "Estimated Due Date (calculated from LMP)",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "example": "2025-12-06"
+    },
+    "location": {
+      "type": "string",
+      "description": "Patient's location (city/town)",
+      "minLength": 2,
+      "maxLength": 100,
+      "example": "Dakar"
+    },
+    "country": {
+      "type": "string",
+      "description": "Patient's country",
+      "minLength": 2,
+      "maxLength": 60,
+      "example": "Senegal"
+    },
+    "risk_level": {
+      "type": "string",
+      "description": "Assessed risk level",
+      "enum": ["low", "moderate", "high", "unknown"],
+      "default": "unknown",
+      "example": "low"
+    },
+    "anc_schedule": {
+      "type": "array",
+      "description": "ANC visit schedule (8 visits per WHO guidelines)",
+      "items": {
+        "type": "object",
+        "required": ["visit_number", "week", "scheduled_date", "status"],
+        "properties": {
+          "visit_number": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8,
+            "example": 1
+          },
+          "week": {
+            "type": "integer",
+            "minimum": 8,
+            "maximum": 42,
+            "example": 10
+          },
+          "scheduled_date": {
+            "type": "string",
+            "format": "date",
+            "example": "2025-05-10"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["scheduled", "upcoming", "due_now", "overdue", "completed", "missed"],
+            "example": "scheduled"
+          },
+          "completed_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Actual visit completion date (if completed)",
+            "example": "2025-05-12"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Visit notes or observations",
+            "maxLength": 500
+          }
+        }
+      },
+      "minItems": 8,
+      "maxItems": 8
+    },
+    "medical_history": {
+      "type": "object",
+      "description": "Patient's medical history and conditions",
+      "properties": {
+        "previous_pregnancies": {
+          "type": "integer",
+          "minimum": 0,
+          "example": 2
+        },
+        "previous_complications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "example": ["gestational diabetes"]
+        },
+        "chronic_conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "example": ["hypertension"]
+        },
+        "allergies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "example": ["penicillin"]
+        },
+        "blood_type": {
+          "type": "string",
+          "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "unknown"],
+          "default": "unknown"
+        },
+        "current_medications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "emergency_contact": {
+      "type": "object",
+      "description": "Emergency contact information",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "pattern": "^\\+?[1-9]\\d{1,14}$"
+        },
+        "relationship": {
+          "type": "string",
+          "maxLength": 50
+        }
+      }
+    },
+    "last_interaction": {
+      "type": "string",
+      "description": "Timestamp of last agent interaction",
+      "format": "date-time",
+      "example": "2025-11-24T10:30:00Z"
+    },
+    "last_reminder_sent": {
+      "type": "string",
+      "description": "Timestamp of last reminder sent",
+      "format": "date-time",
+      "example": "2025-11-24T08:00:00Z"
+    },
+    "reminder_preferences": {
+      "type": "object",
+      "description": "User's reminder preferences",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "preferred_time": {
+          "type": "string",
+          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+          "example": "08:00",
+          "description": "Preferred time for reminders (24-hour format)"
+        },
+        "language": {
+          "type": "string",
+          "enum": ["en", "fr", "ar", "sw", "ha", "yo"],
+          "default": "en",
+          "description": "Preferred language for reminders"
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "description": "Record creation timestamp",
+      "format": "date-time",
+      "example": "2025-11-01T09:00:00Z"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "Last record update timestamp",
+      "format": "date-time",
+      "example": "2025-11-24T10:30:00Z"
+    },
+    "status": {
+      "type": "string",
+      "description": "Pregnancy record status",
+      "enum": ["active", "completed", "inactive", "archived"],
+      "default": "active",
+      "example": "active"
+    },
+    "notes": {
+      "type": "string",
+      "description": "General notes about the pregnancy",
+      "maxLength": 2000
+    }
+  },
+  "examples": [
+    {
+      "phone": "+2347012345678",
+      "name": "Amina Diallo",
+      "age": 28,
+      "lmp_date": "2025-06-09",
+      "edd": "2026-03-16",
+      "location": "Dakar",
+      "country": "Senegal",
+      "risk_level": "low",
+      "anc_schedule": [
+        {
+          "visit_number": 1,
+          "week": 10,
+          "scheduled_date": "2025-08-18",
+          "status": "overdue"
+        },
+        {
+          "visit_number": 2,
+          "week": 20,
+          "scheduled_date": "2025-10-27",
+          "status": "overdue"
+        }
+      ],
+      "medical_history": {
+        "previous_pregnancies": 1,
+        "previous_complications": [],
+        "chronic_conditions": [],
+        "blood_type": "O+"
+      },
+      "emergency_contact": {
+        "name": "Ibrahim Diallo",
+        "phone": "+2347012345679",
+        "relationship": "spouse"
+      },
+      "reminder_preferences": {
+        "enabled": true,
+        "preferred_time": "08:00",
+        "language": "fr"
+      },
+      "created_at": "2025-06-15T10:00:00Z",
+      "updated_at": "2025-11-24T10:30:00Z",
+      "status": "active"
+    }
+  ]
+}
