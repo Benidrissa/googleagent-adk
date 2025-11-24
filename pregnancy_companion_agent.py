@@ -1227,6 +1227,136 @@ async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
         }
 
 
+async def resume_session_for_reminder(
+    user_id: str,
+    reminder_message: str,
+    session_id: Optional[str] = None,
+    create_if_missing: bool = True
+) -> Dict[str, Any]:
+    """
+    Resume or create a session to deliver a system-initiated reminder.
+    
+    This function is designed for the LoopAgent reminder system to:
+    1. Find the user's most recent session OR create a new one
+    2. Preserve conversation context if session exists
+    3. Deliver the reminder message through the agent
+    4. Handle cases where session doesn't exist
+    
+    Args:
+        user_id: User identifier (typically phone number)
+        reminder_message: The reminder message to deliver
+        session_id: Optional specific session to resume (if None, finds most recent)
+        create_if_missing: If True, creates new session if none exists
+        
+    Returns:
+        dict: Status and agent response
+    """
+    try:
+        # Find session
+        target_session_id = session_id
+        
+        if not target_session_id:
+            # Try to find user's most recent session
+            # For now, create a reminder-specific session
+            target_session_id = f"reminder_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}"
+            logger.info(f"Creating reminder session: {target_session_id}")
+        
+        # Check if session exists
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=target_session_id
+        )
+        
+        session_existed = session is not None
+        
+        # Create session if needed
+        if not session and create_if_missing:
+            await session_service.create_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=target_session_id
+            )
+            logger.info(f"Created new reminder session: {target_session_id}")
+            session = await session_service.get_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=target_session_id
+            )
+        
+        if not session:
+            return {
+                "status": "error",
+                "error_message": "Could not create or find session",
+                "user_id": user_id
+            }
+        
+        # Mark session as system-initiated
+        session.state["system_initiated"] = True
+        session.state["last_reminder_time"] = datetime.datetime.now().isoformat()
+        
+        # Deliver reminder through agent
+        system_prompt = f"[SYSTEM REMINDER - Do not ask for confirmation, just deliver the message warmly]\n\n{reminder_message}"
+        
+        response = await run_agent_interaction(
+            user_input=system_prompt,
+            user_id=user_id,
+            session_id=target_session_id
+        )
+        
+        logger.info(f"Reminder delivered to {user_id} via session {target_session_id}")
+        
+        return {
+            "status": "success",
+            "session_id": target_session_id,
+            "session_existed": session_existed,
+            "reminder_delivered": True,
+            "agent_response": response,
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Error resuming session for reminder: {e}")
+        return {
+            "status": "error",
+            "error_message": str(e),
+            "user_id": user_id
+        }
+
+
+async def get_or_create_user_session(
+    user_id: str,
+    session_prefix: str = "session"
+) -> Optional[str]:
+    """
+    Get user's most recent session ID or create a new one.
+    
+    Args:
+        user_id: User identifier
+        session_prefix: Prefix for session ID generation
+        
+    Returns:
+        Session ID string or None if error
+    """
+    try:
+        # For now, we create a new session each time
+        # In production, you might query the session service for recent sessions
+        session_id = f"{session_prefix}_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        await session_service.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        logger.info(f"Created session: {session_id} for user: {user_id}")
+        return session_id
+        
+    except Exception as e:
+        logger.error(f"Error getting/creating session: {e}")
+        return None
+
+
 # ============================================================================
 # SERVICES INITIALIZATION - Session and Memory Management
 # ============================================================================
