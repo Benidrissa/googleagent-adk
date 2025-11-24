@@ -992,6 +992,7 @@ RESEARCH CAPABILITIES:
 - Use google_search tool to find current medical guidelines when needed
 - Search for condition-specific information for better assessments
 - Verify latest pregnancy care recommendations
+- Use google_search tool to find current emergency contacts numbers when needed based on patient's location
 
 RESPONSE FORMAT:
 Always respond with a clear JSON structure:
@@ -1004,7 +1005,7 @@ Always respond with a clear JSON structure:
 
 Be professional, compassionate, and always prioritize patient safety.
 """,
-    tools=[find_nearby_health_facilities, get_local_health_facilities],
+    tools=[google_search,find_nearby_health_facilities, get_local_health_facilities],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2,  # Lower temperature for more consistent medical assessments
         safety_settings=[
@@ -1065,6 +1066,7 @@ except Exception as e:
 
 # Build tools list conditionally based on MCP and OpenAPI availability
 agent_tools = [
+    google_search,
     calculate_edd,
     calculate_anc_schedule,  # WHO-based ANC visit schedule
     infer_country_from_location,
@@ -1169,6 +1171,7 @@ OPERATIONAL PROTOCOL:
    - Always prioritize patient safety
    - When in doubt, recommend consulting healthcare provider
    - Provide emergency contact information for high-risk situations
+   - Use google_search tool to find current emergency contacts numbers when needed based on patient's location
 
 REMEMBER: You are a support companion, not a replacement for medical care.
 """,
