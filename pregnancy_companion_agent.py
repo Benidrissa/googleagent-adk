@@ -39,6 +39,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
 from google.adk.tools import google_search, AgentTool
 from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.openapi_tool import OpenAPIToolset
 from google.genai import types
 from google.genai.types import HarmCategory, HarmBlockThreshold
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -1040,16 +1041,35 @@ except Exception as e:
 
 
 # ============================================================================
+# OPENAPI FACILITIES TOOLSET
+# ============================================================================
+
+# Create OpenAPI toolset for health facilities search
+try:
+    from pathlib import Path
+    facilities_openapi_spec = Path(__file__).parent / "facilities_api.yaml"
+    
+    facilities_api = OpenAPIToolset(
+        openapi_spec_path=str(facilities_openapi_spec),
+        server_url="http://localhost:8080"
+    )
+    logger.info("✅ Facilities OpenAPI Toolset created")
+except Exception as e:
+    logger.error(f"Failed to create OpenAPI toolset: {e}")
+    facilities_api = None
+
+
+# ============================================================================
 # MAIN PREGNANCY COMPANION AGENT
 # ============================================================================
 
-# Build tools list conditionally based on MCP availability
+# Build tools list conditionally based on MCP and OpenAPI availability
 agent_tools = [
     calculate_edd,
     calculate_anc_schedule,  # WHO-based ANC visit schedule
     infer_country_from_location,
     assess_road_accessibility,
-    get_local_health_facilities,  # MCP-style offline facility lookup
+    get_local_health_facilities,  # MCP-style offline facility lookup (fallback)
 ]
 
 # Add MCP toolset if available
@@ -1058,6 +1078,13 @@ if pregnancy_mcp is not None:
     logger.info("✅ MCP toolset added to agent tools")
 else:
     logger.warning("⚠️  MCP toolset not available, pregnancy records will not persist")
+
+# Add OpenAPI facilities toolset if available
+if facilities_api is not None:
+    agent_tools.append(facilities_api)
+    logger.info("✅ OpenAPI facilities toolset added to agent tools")
+else:
+    logger.warning("⚠️  OpenAPI toolset not available, using fallback facility lookup")
 
 # Always add nurse agent
 agent_tools.append(AgentTool(agent=nurse_agent))
@@ -1098,14 +1125,20 @@ OPERATIONAL PROTOCOL:
    - Tailor advice to local context and traditional diets
    - Examples: iron-rich foods (beans, leafy greens), protein sources, hydration
 
-4. **Road Accessibility Assessment**:
+4. **Health Facility Search**:
+   - Use OpenAPI facilities tool to find nearby hospitals, clinics, and maternity centers
+   - Provide facility details: name, address, distance, rating, services
+   - Filter by type (hospital, maternity, emergency) based on patient needs
+   - Include contact information and emergency availability
+
+5. **Road Accessibility Assessment**:
    - As due date approaches (weeks_remaining < 4), proactively assess road accessibility
    - Use assess_road_accessibility tool with patient's location
    - Provide travel time and distance to nearest hospital
    - Advise on planning transportation in advance
    - Consider local conditions (rainy season, road quality)
 
-5. **Risk Assessment - CRITICAL PROTOCOL**:
+6. **Risk Assessment - CRITICAL PROTOCOL**:
    - If the patient mentions ANY of these symptoms, you MUST call the `nurse_agent` tool:
      * Bleeding (any amount)
      * Dizziness, spots in vision, or fainting
@@ -1125,14 +1158,14 @@ OPERATIONAL PROTOCOL:
      * If MODERATE RISK: Recommend scheduling appointment soon
      * If LOW RISK: Provide reassurance and general advice
 
-6. **Communication Style**:
+7. **Communication Style**:
    - Use simple, caring language
    - Avoid medical jargon, acronyms, and abbreviations
    - Be culturally sensitive and respectful
    - Provide clear, actionable guidance
    - Never be alarmist, but be honest about risks
 
-7. **Safety First**:
+8. **Safety First**:
    - Always prioritize patient safety
    - When in doubt, recommend consulting healthcare provider
    - Provide emergency contact information for high-risk situations
