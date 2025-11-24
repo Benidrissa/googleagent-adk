@@ -13,3 +13,6 @@ aiohttp>=3.9.0
 
 # For Google Maps API integration
 requests>=2.31.0
+
+# For ANC reminder scheduling
+APScheduler>=3.10.4
