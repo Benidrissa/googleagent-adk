@@ -64,6 +64,20 @@ GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", GOOGLE_API_KEY)
 if GOOGLE_MAPS_API_KEY == "YOUR_API_KEY_HERE":
     logger.warning("⚠️  GOOGLE_MAPS_API_KEY not set. Maps functionality will be limited.")
 
+# Helper function to check if we should use simulation mode
+def _is_api_key_placeholder(api_key: str) -> bool:
+    """Check if the API key is a placeholder value."""
+    if not api_key:
+        return True
+    placeholder_values = [
+        "your_google_maps_api_key_here",
+        "YOUR_API_KEY_HERE",
+        "your_api_key_here",
+        "INSERT_API_KEY_HERE",
+        "REPLACE_WITH_YOUR_KEY"
+    ]
+    return api_key in placeholder_values or len(api_key) < 20
+
 MODEL_NAME = "gemini-2.0-flash-exp"
 
 # Session state keys for pause/resume functionality
@@ -209,6 +223,7 @@ def calculate_edd(lmp_date: str) -> Dict[str, Any]:
 def infer_country_from_location(location: str) -> Dict[str, Any]:
     """
     Infers the country from a location string using geocoding.
+    Falls back to simulation mode if API key is not set.
     
     Args:
         location: Location string (city, region, address, etc.)
@@ -222,6 +237,38 @@ def infer_country_from_location(location: str) -> Dict[str, Any]:
     """
     if not location or not location.strip():
         return {"status": "error", "error_message": "Location cannot be empty"}
+    
+    # Simulation mode when API key is not set
+    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
+        location_lower = location.lower()
+        simulated_mappings = {
+            "lagos": ("Nigeria", "Lagos, Nigeria"),
+            "bamako": ("Mali", "Bamako, Mali"),
+            "accra": ("Ghana", "Accra, Ghana"),
+            "abuja": ("Nigeria", "Abuja, Nigeria"),
+            "kumasi": ("Ghana", "Kumasi, Ghana"),
+            "sikasso": ("Mali", "Sikasso, Mali"),
+            "port harcourt": ("Nigeria", "Port Harcourt, Nigeria"),
+            "kano": ("Nigeria", "Kano, Nigeria"),
+        }
+        
+        for city, (country, formatted) in simulated_mappings.items():
+            if city in location_lower:
+                logger.info(f"[SIMULATION] Inferred country '{country}' from location '{location}'")
+                return {
+                    "status": "success",
+                    "country": country,
+                    "formatted_location": formatted,
+                    "simulation": True
+                }
+        
+        # Default for unknown locations
+        logger.warning(f"[SIMULATION] Unknown location: {location}")
+        return {
+            "status": "error",
+            "error_message": f"Could not determine country from location: {location}",
+            "simulation": True
+        }
     
     try:
         # Use Google Maps Geocoding API
@@ -276,6 +323,7 @@ def infer_country_from_location(location: str) -> Dict[str, Any]:
 def find_nearby_health_facilities(location: str, radius_meters: int = 5000) -> Dict[str, Any]:
     """
     Finds nearby health facilities (hospitals, clinics, maternity centers) using Google Places API.
+    Falls back to simulation mode if API key is not set.
     
     Args:
         location: Location string (city, address, coordinates)
@@ -288,6 +336,49 @@ def find_nearby_health_facilities(location: str, radius_meters: int = 5000) -> D
             - count: Number of facilities found
             - error_message: Error description if status is "error"
     """
+    # Simulation mode when API key is not set
+    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
+        location_lower = location.lower()
+        
+        # Simulated facilities for known cities
+        simulated_facilities = {
+            "lagos": [
+                {"name": "Lagos University Teaching Hospital", "address": "Idi-Araba, Lagos", "rating": 4.2, "open_now": True, "types": ["hospital", "emergency"]},
+                {"name": "Lagos Island Maternity Hospital", "address": "Broad Street, Lagos Island", "rating": 4.0, "open_now": True, "types": ["hospital", "maternity"]},
+                {"name": "Mainland Hospital Yaba", "address": "Yaba, Lagos", "rating": 3.8, "open_now": True, "types": ["hospital", "clinic"]},
+            ],
+            "bamako": [
+                {"name": "Hospital Gabriel Touré", "address": "Commune III, Bamako", "rating": 4.1, "open_now": True, "types": ["hospital", "emergency"]},
+                {"name": "Point G Hospital", "address": "Point G, Bamako", "rating": 4.3, "open_now": True, "types": ["hospital"]},
+                {"name": "Maternité Communautaire du Mali", "address": "Commune IV, Bamako", "rating": 3.9, "open_now": True, "types": ["hospital", "maternity"]},
+            ],
+            "accra": [
+                {"name": "Ridge Hospital", "address": "Ridge, Accra", "rating": 4.2, "open_now": True, "types": ["hospital"]},
+                {"name": "Korle Bu Teaching Hospital", "address": "Korle Bu, Accra", "rating": 4.4, "open_now": True, "types": ["hospital", "emergency"]},
+                {"name": "Princess Marie Louise Hospital", "address": "Kinkole, Accra", "rating": 4.0, "open_now": True, "types": ["hospital", "maternity"]},
+            ],
+        }
+        
+        for city, facilities_list in simulated_facilities.items():
+            if city in location_lower:
+                logger.info(f"[SIMULATION] Found {len(facilities_list)} facilities near {location}")
+                return {
+                    "status": "success",
+                    "facilities": facilities_list,
+                    "count": len(facilities_list),
+                    "location": location,
+                    "radius_meters": radius_meters,
+                    "simulation": True
+                }
+        
+        # Default for unknown locations
+        logger.warning(f"[SIMULATION] No facilities data for location: {location}")
+        return {
+            "status": "error",
+            "error_message": f"No facilities found near {location}. Try: Lagos, Bamako, or Accra",
+            "simulation": True
+        }
+    
     try:
         # First, geocode the location to get coordinates
         geocode_url = "https://maps.googleapis.com/maps/api/geocode/json"
@@ -367,6 +458,7 @@ def assess_road_accessibility(location: str, destination: str = None) -> Dict[st
     """
     Assesses road accessibility and travel information between locations.
     Useful for planning trips to health facilities near due date.
+    Falls back to simulation mode if API key is not set.
     
     Args:
         location: Starting location (patient's location)
@@ -381,6 +473,58 @@ def assess_road_accessibility(location: str, destination: str = None) -> Dict[st
             - travel_mode: Mode of transportation
             - error_message: Error description if status is "error"
     """
+    # Simulation mode when API key is not set
+    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
+        location_lower = location.lower()
+        
+        simulated_routes = {
+            "lagos": {
+                "distance": "2.3 km",
+                "duration": "15 mins",
+                "start_address": location,
+                "end_address": "Lagos University Teaching Hospital, Idi-Araba, Lagos",
+                "traffic_note": "Moderate traffic during peak hours"
+            },
+            "bamako": {
+                "distance": "1.8 km",
+                "duration": "10 mins",
+                "start_address": location,
+                "end_address": "Hospital Gabriel Touré, Commune III, Bamako",
+                "traffic_note": "Generally good road conditions"
+            },
+            "accra": {
+                "distance": "1.5 km",
+                "duration": "8 mins",
+                "start_address": location,
+                "end_address": "Ridge Hospital, Ridge, Accra",
+                "traffic_note": "Excellent road access"
+            }
+        }
+        
+        for city, route_info in simulated_routes.items():
+            if city in location_lower:
+                logger.info(f"[SIMULATION] Assessed route from {location}")
+                return {
+                    "status": "success",
+                    "route_available": True,
+                    "travel_mode": "driving",
+                    "simulation": True,
+                    **route_info
+                }
+        
+        # Default for unknown locations
+        logger.warning(f"[SIMULATION] No route data for location: {location}")
+        return {
+            "status": "success",
+            "distance": "Unknown",
+            "duration": "Unknown",
+            "route_available": False,
+            "travel_mode": "driving",
+            "start_address": location,
+            "end_address": "Nearest health facility",
+            "simulation": True
+        }
+    
     try:
         # If no destination, find nearest hospital first
         if not destination:
@@ -701,7 +845,7 @@ async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
         if session and session.state.get(STATE_PAUSED, False):
             pause_reason = session.state.get(STATE_PAUSE_REASON, "unknown")
             pause_time = session.state.get(STATE_PAUSE_TIMESTAMP, "")
-            last_topic = session.state.get(STATE_LAST_TOPIC, "")
+            last_topic = session.state.get(STATE_LAST_TOPIC, "general consultation")
             
             # Clear pause state
             session.state[STATE_PAUSED] = False
@@ -715,7 +859,7 @@ async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
                 "was_paused_reason": pause_reason,
                 "pause_duration": pause_time,
                 "last_topic": last_topic,
-                "resume_context": f"Welcome back! We were discussing: {last_topic}" if last_topic else "Welcome back!"
+                "resume_context": f"Welcome back! We were discussing: {last_topic}"
             }
         else:
             return {
@@ -776,9 +920,19 @@ async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID,
         span = None
     
     try:
-        # Create session if it doesn't exist
+        # Create session if it doesn't exist or if session_id is provided but doesn't exist
         if session_id is None:
             session_id = f"session_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Check if session exists
+        session = await session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        # Create session if it doesn't exist
+        if not session:
             await session_service.create_session(
                 app_name=APP_NAME,
                 user_id=user_id,
@@ -787,13 +941,15 @@ async def run_agent_interaction(user_input: str, user_id: str = DEFAULT_USER_ID,
             logger.info(f"Created new session: {session_id}")
             if span:
                 span.add_event("session_created")
+            
+            # Get the newly created session
+            session = await session_service.get_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=session_id
+            )
         
         # Check if session is paused and handle resumption
-        session = await session_service.get_session(
-            app_name=APP_NAME,
-            user_id=user_id,
-            session_id=session_id
-        )
         
         if session and session.state.get(STATE_PAUSED, False):
             resume_info = await resume_consultation(session_id, user_id)
