@@ -469,6 +469,109 @@ def calculate_edd(lmp_date: str) -> Dict[str, Any]:
         }
 
 
+def calculate_anc_schedule(lmp_date: str) -> Dict[str, Any]:
+    """
+    Calculates the complete ANC (Antenatal Care) visit schedule based on WHO guidelines.
+    
+    WHO recommends a minimum of 8 ANC contacts during pregnancy:
+    - First visit: 8-12 weeks (we use 10 weeks as midpoint)
+    - Second visit: 20 weeks
+    - Third visit: 26 weeks
+    - Fourth visit: 30 weeks
+    - Fifth visit: 34 weeks
+    - Sixth visit: 36 weeks
+    - Seventh visit: 38 weeks
+    - Eighth visit: 40 weeks (at EDD)
+    
+    Args:
+        lmp_date: Last Menstrual Period date in YYYY-MM-DD format (e.g., "2025-03-01")
+        
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - anc_schedule: List of ANC visits with dates and status
+            - next_visit: Next upcoming visit information (within 14 days)
+            - overdue_visits: List of overdue visits (more than 7 days past)
+            - completed_visits: Count of completed visits
+            - error_message: Error description if status is "error"
+    """
+    try:
+        lmp = datetime.datetime.strptime(lmp_date, "%Y-%m-%d")
+        current_date = datetime.datetime.now()
+        
+        # WHO ANC visit schedule (in weeks from LMP)
+        anc_weeks = [10, 20, 26, 30, 34, 36, 38, 40]
+        
+        schedule = []
+        next_visit = None
+        overdue_visits = []
+        completed_count = 0
+        
+        for visit_num, week in enumerate(anc_weeks, start=1):
+            visit_date = lmp + datetime.timedelta(weeks=week)
+            days_until_visit = (visit_date - current_date).days
+            
+            # Determine visit status
+            if days_until_visit < -7:  # More than 7 days past
+                status = "overdue"
+                overdue_visits.append({
+                    "visit_number": visit_num,
+                    "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                    "week": week,
+                    "days_overdue": abs(days_until_visit)
+                })
+            elif days_until_visit < 0:  # Within 7 days past
+                status = "due_now"
+            elif days_until_visit <= 14:  # Within next 14 days (2 weeks)
+                status = "upcoming"
+                if next_visit is None:
+                    next_visit = {
+                        "visit_number": visit_num,
+                        "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                        "week": week,
+                        "days_until": days_until_visit
+                    }
+            else:
+                status = "scheduled"
+            
+            schedule.append({
+                "visit_number": visit_num,
+                "week": week,
+                "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                "status": status,
+                "days_until": days_until_visit
+            })
+        
+        # Calculate gestational age
+        gestational_weeks = int((current_date - lmp).days / 7)
+        
+        logger.info(f"ANC schedule calculated: {len(schedule)} visits, {len(overdue_visits)} overdue")
+        
+        return {
+            "status": "success",
+            "anc_schedule": schedule,
+            "next_visit": next_visit,
+            "overdue_visits": overdue_visits,
+            "completed_visits": completed_count,
+            "total_visits": len(schedule),
+            "current_gestational_age": f"{gestational_weeks} weeks",
+            "lmp_date": lmp_date
+        }
+        
+    except ValueError as e:
+        logger.error(f"Invalid date format for LMP: {lmp_date}")
+        return {
+            "status": "error",
+            "error_message": f"Invalid date format. Please use YYYY-MM-DD format (e.g., 2025-03-01)"
+        }
+    except Exception as e:
+        logger.error(f"Error calculating ANC schedule: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error calculating ANC schedule: {str(e)}"
+        }
+
+
 def infer_country_from_location(location: str) -> Dict[str, Any]:
     """
     Infers the country from a location string using geocoding.
@@ -998,6 +1101,7 @@ REMEMBER: You are a support companion, not a replacement for medical care.
 """,
     tools=[
         calculate_edd,
+        calculate_anc_schedule,  # WHO-based ANC visit schedule
         infer_country_from_location,
         assess_road_accessibility,
         get_local_health_facilities,  # MCP-style offline facility lookup
