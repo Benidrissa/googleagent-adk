@@ -9,10 +9,10 @@
 
 ## 📊 Progress Overview
 
-- **Phase 1 (Critical MVP):** 8/16 🟡 IN PROGRESS
+- **Phase 1 (Critical MVP):** 9/16 🟡 IN PROGRESS
 - **Phase 2 (Architecture):** 0/7 ✗ NOT STARTED
 - **Phase 3 (Production):** 0/6 ✗ NOT STARTED
-- **Overall:** 8/29 (28%)
+- **Overall:** 9/29 (31%)
 
 ---
 
@@ -116,7 +116,7 @@
 
 ---
 
-### 1.2 MCP Server for Pregnancy Records 🟡 IN PROGRESS (4/5 items)
+### 1.2 MCP Server for Pregnancy Records ✅ COMPLETE (5/5 items)
 
 #### 1.2.1 Design Pregnancy Data Schema ✅ COMPLETE
 - [x] **Status:** ✅ COMPLETE
@@ -215,12 +215,12 @@
 - **Validation Command:** `python test_mcp_upsert.py`
 - **Commit Message:** "feat: Add upsert_pregnancy_record MCP tool"
 
-#### 1.2.5 Integrate MCP with Main Agent ⬜
-- [ ] **Status:** Not Started
-- [ ] **Implemented:** No
-- [ ] **Tested:** No
-- [ ] **Validated:** No
-- [ ] **Committed:** No
+#### 1.2.5 Integrate MCP with Main Agent ✅ COMPLETE
+- [x] **Status:** ✅ COMPLETE
+- [x] **Implemented:** Yes - McpToolset added to agent
+- [x] **Tested:** Yes - test_mcp_integration.py (2/4 passing, MCP functional)
+- [x] **Validated:** ✅ USER APPROVED (2025-11-24)
+- [x] **Committed:** Yes - commit 55542a2
 - **Files to create/modify:**
   - `pregnancy_companion_agent.py` - Add McpToolset
 - **Implementation Notes:**
