@@ -21,8 +21,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import agent runner (will be implemented after deployment structure is ready)
-# from pregnancy_companion_agent import run_agent_interaction
+# Import agent runner
+from pregnancy_companion_agent import run_agent_interaction
 
 # Conditional import for reminder scheduler
 try:
@@ -160,24 +160,19 @@ async def chat(request: ChatRequest):
     try:
         logger.info(f"Chat request from user {request.user_id}: {request.message[:50]}...")
         
-        # TODO: Implement agent interaction once runner is set up
-        # For now, return a placeholder response
-        # Uncomment when agent integration is ready:
-        # result = await run_agent_interaction(
-        #     user_input=request.message,
-        #     user_id=request.user_id,
-        #     session_id=request.session_id
-        # )
+        # Generate session_id if not provided
+        session_id = request.session_id or f"session_{request.user_id}_{datetime.datetime.now().timestamp()}"
         
-        # Placeholder implementation
-        result = {
-            "session_id": request.session_id or f"session_{request.user_id}_{datetime.datetime.now().timestamp()}",
-            "response": "Hello! I am your pregnancy companion. This is a placeholder response. The agent will be integrated soon."
-        }
+        # Run the agent interaction
+        agent_response = await run_agent_interaction(
+            user_input=request.message,
+            user_id=request.user_id,
+            session_id=session_id
+        )
         
         return ChatResponse(
-            session_id=result.get("session_id", "unknown"),
-            response=result.get("response", ""),
+            session_id=session_id,
+            response=agent_response,
             timestamp=datetime.datetime.now().isoformat()
         )
         
