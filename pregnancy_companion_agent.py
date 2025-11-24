@@ -19,6 +19,17 @@ import json
 import requests
 import asyncio
 from typing import Dict, Any, Optional, List, Union
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logger_dotenv = logging.getLogger(__name__)
+    logger_dotenv.info("✅ Environment variables loaded from .env file")
+except ImportError:
+    # dotenv not installed, environment variables will be loaded from system only
+    pass
+
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -78,7 +89,7 @@ def _is_api_key_placeholder(api_key: str) -> bool:
     ]
     return api_key in placeholder_values or len(api_key) < 20
 
-MODEL_NAME = "gemini-2.0-flash-exp"
+MODEL_NAME = "gemini-2.5-flash-lite"
 
 # Session state keys for pause/resume functionality
 STATE_PAUSED = "consultation_paused"
@@ -649,7 +660,7 @@ Always respond with a clear JSON structure:
 
 Be professional, compassionate, and always prioritize patient safety.
 """,
-    tools=[google_search, find_nearby_health_facilities, get_local_health_facilities],
+    tools=[find_nearby_health_facilities, get_local_health_facilities],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2,  # Lower temperature for more consistent medical assessments
         safety_settings=[
@@ -699,12 +710,12 @@ OPERATIONAL PROTOCOL:
    - Share the results in a friendly, understandable way
    - Note the weeks_remaining for travel planning purposes
 
-3. **Nutrition Information via Google Search**:
-   - Use google_search tool to find relevant nutrition information for pregnant women
-   - Search for culturally appropriate foods available in the patient's country/location
-   - Topics to search: pregnancy-safe foods, nutrients by trimester, foods to avoid, traditional pregnancy diets
-   - Provide evidence-based nutrition advice tailored to local context
-   - Examples: "pregnancy nutrition West Africa", "iron-rich foods pregnancy Mali", "foods to avoid pregnancy"
+3. **Nutrition Information**:
+   - Provide evidence-based nutrition advice for pregnant women
+   - Recommend culturally appropriate foods available in the patient's country/location
+   - Topics: pregnancy-safe foods, nutrients by trimester, foods to avoid, traditional pregnancy diets
+   - Tailor advice to local context and traditional diets
+   - Examples: iron-rich foods (beans, leafy greens), protein sources, hydration
 
 4. **Road Accessibility Assessment**:
    - As due date approaches (weeks_remaining < 4), proactively assess road accessibility
@@ -752,7 +763,6 @@ REMEMBER: You are a support companion, not a replacement for medical care.
         infer_country_from_location,
         assess_road_accessibility,
         get_local_health_facilities,  # MCP-style offline facility lookup
-        google_search,
         AgentTool(agent=nurse_agent)  # Nurse agent as a tool for risk assessment
     ],
     generate_content_config=types.GenerateContentConfig(
