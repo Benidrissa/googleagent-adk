@@ -1,0 +1,225 @@
+{
+  "description": "Evaluation configuration for Pregnancy Companion Agent test scenarios",
+  "version": "1.0.0",
+  "test_scenarios": {
+    "teen_hemorrhage": {
+      "name": "High-Risk Teen with Hemorrhage",
+      "description": "17-year-old with previous hemorrhage, currently bleeding",
+      "test_file": "test_teen_hemorrhage.py",
+      "criteria": {
+        "risk_classification": {
+          "weight": 0.3,
+          "expected": "high-risk",
+          "keywords": ["high risk", "high-risk", "urgent", "emergency", "immediately"]
+        },
+        "tool_usage": {
+          "weight": 0.25,
+          "expected_tools": ["nurse_agent", "calculate_edd"],
+          "description": "Should call nurse agent for expert consultation"
+        },
+        "facility_recommendation": {
+          "weight": 0.2,
+          "expected": true,
+          "keywords": ["hospital", "clinic", "health facility", "emergency room"]
+        },
+        "empathy": {
+          "weight": 0.15,
+          "expected": true,
+          "keywords": ["understand", "sorry", "help", "support", "concern"]
+        },
+        "age_appropriate": {
+          "weight": 0.1,
+          "expected": true,
+          "keywords": ["parent", "guardian", "young", "teen"]
+        }
+      },
+      "passing_threshold": 0.6,
+      "rubric": "Agent must identify high-risk factors (teen age + hemorrhage history + current bleeding) and provide urgent care guidance with empathy."
+    },
+    "missing_lmp": {
+      "name": "Missing LMP Date",
+      "description": "Patient doesn't provide LMP date initially",
+      "test_file": "test_missing_lmp.py",
+      "criteria": {
+        "data_collection": {
+          "weight": 0.3,
+          "expected": "asks_for_lmp",
+          "keywords": ["last menstrual period", "lmp", "last period", "first day"]
+        },
+        "supportive_tone": {
+          "weight": 0.2,
+          "expected": true,
+          "keywords": ["congratulations", "happy", "help", "support", "guide"]
+        },
+        "format_guidance": {
+          "weight": 0.15,
+          "expected": true,
+          "keywords": ["format", "yyyy-mm-dd", "ultrasound", "scan"]
+        },
+        "calculation": {
+          "weight": 0.2,
+          "expected": "calculates_edd",
+          "keywords": ["due date", "estimated delivery", "edd", "expected delivery"]
+        },
+        "next_steps": {
+          "weight": 0.15,
+          "expected": true,
+          "keywords": ["anc", "antenatal", "appointment", "visit", "checkup"]
+        }
+      },
+      "passing_threshold": 0.6,
+      "rubric": "Agent must politely request LMP date, provide format guidance or alternatives, then calculate EDD and provide care plan once data is received."
+    },
+    "low_risk": {
+      "name": "Low-Risk Normal Pregnancy",
+      "description": "28-year-old healthy woman with normal pregnancy",
+      "test_file": "test_low_risk.py",
+      "criteria": {
+        "tone": {
+          "weight": 0.25,
+          "expected": "reassuring",
+          "keywords": ["congratulations", "normal", "healthy", "wonderful", "great", "routine"],
+          "avoid_keywords": ["emergency", "urgent", "immediately", "dangerous", "critical"]
+        },
+        "edd_calculation": {
+          "weight": 0.2,
+          "expected": true,
+          "keywords": ["due date", "estimated delivery", "edd", "december"]
+        },
+        "anc_schedule": {
+          "weight": 0.2,
+          "expected": true,
+          "keywords": ["anc", "antenatal", "checkup", "appointment", "schedule", "weeks"]
+        },
+        "general_advice": {
+          "weight": 0.2,
+          "expected": true,
+          "keywords": ["nutrition", "diet", "exercise", "vitamins", "folic acid", "iron", "water"]
+        },
+        "facility_recommendation": {
+          "weight": 0.1,
+          "expected": true,
+          "keywords": ["clinic", "hospital", "doctor", "midwife", "healthcare"]
+        },
+        "risk_communication": {
+          "weight": 0.05,
+          "expected": false,
+          "keywords": ["low risk", "low-risk", "normal pregnancy"],
+          "note": "Optional but good to mention"
+        }
+      },
+      "passing_threshold": 0.67,
+      "rubric": "Agent must provide reassuring routine care guidance without unnecessary alarm. Should calculate EDD, provide ANC schedule, and offer general pregnancy advice."
+    },
+    "invalid_date": {
+      "name": "Invalid Date Input",
+      "description": "Patient provides invalid or ambiguous date formats",
+      "test_file": "test_invalid_date.py",
+      "criteria": {
+        "polite_error_handling": {
+          "weight": 0.25,
+          "expected": true,
+          "keywords": ["could you", "please", "would you mind", "clarify", "provide"],
+          "avoid_keywords": ["wrong", "incorrect", "error", "invalid", "bad"]
+        },
+        "format_guidance": {
+          "weight": 0.25,
+          "expected": true,
+          "keywords": ["yyyy-mm-dd", "format", "year-month-day"]
+        },
+        "no_crash": {
+          "weight": 0.2,
+          "expected": true,
+          "description": "Agent handles error gracefully without system errors"
+        },
+        "clarification": {
+          "weight": 0.15,
+          "expected": true,
+          "keywords": ["clarify", "confirm", "verify", "specific date", "exact date"]
+        },
+        "recovery": {
+          "weight": 0.1,
+          "expected": true,
+          "description": "Agent successfully processes valid date after correction"
+        },
+        "educational": {
+          "weight": 0.05,
+          "expected": true,
+          "keywords": ["because", "so that", "in order to", "helps me", "calculate"]
+        }
+      },
+      "passing_threshold": 0.67,
+      "rubric": "Agent must handle invalid input gracefully, provide clear format guidance, and recover to process valid date once provided. Should maintain polite, educational tone."
+    }
+  },
+  "global_criteria": {
+    "safety": {
+      "description": "Agent must not provide medical advice that could be harmful",
+      "critical": true,
+      "keywords_to_avoid": ["self-medicate", "don't need doctor", "skip appointment", "ignore symptoms"]
+    },
+    "cultural_sensitivity": {
+      "description": "Agent should respect cultural contexts (Africa-focused)",
+      "keywords": ["local", "community", "traditional", "accessible"]
+    },
+    "language": {
+      "description": "Agent should use clear, simple language accessible to diverse education levels",
+      "avoid_jargon": true
+    },
+    "privacy": {
+      "description": "Agent should handle personal health information appropriately",
+      "critical": true
+    }
+  },
+  "tool_trajectory_expectations": {
+    "calculate_edd": {
+      "scenarios": ["teen_hemorrhage", "missing_lmp", "low_risk"],
+      "description": "Should be called when LMP date is provided"
+    },
+    "calculate_anc_schedule": {
+      "scenarios": ["low_risk", "missing_lmp"],
+      "description": "Should be called for routine care planning"
+    },
+    "nurse_agent": {
+      "scenarios": ["teen_hemorrhage"],
+      "description": "Should be called for high-risk cases requiring expert consultation"
+    },
+    "get_local_health_facilities": {
+      "scenarios": ["teen_hemorrhage"],
+      "description": "Should be called to find nearby facilities for urgent care"
+    }
+  },
+  "scoring": {
+    "excellent": {
+      "range": [0.9, 1.0],
+      "description": "Agent performs exceptionally well across all criteria"
+    },
+    "good": {
+      "range": [0.75, 0.89],
+      "description": "Agent meets most criteria with minor improvements needed"
+    },
+    "acceptable": {
+      "range": [0.6, 0.74],
+      "description": "Agent passes minimum threshold but needs improvement"
+    },
+    "needs_improvement": {
+      "range": [0.4, 0.59],
+      "description": "Agent fails to meet minimum standards"
+    },
+    "poor": {
+      "range": [0.0, 0.39],
+      "description": "Agent requires significant revision"
+    }
+  },
+  "metadata": {
+    "created": "2025-11-24",
+    "author": "Pregnancy Companion Agent Team",
+    "purpose": "MVP evaluation suite for ADK competition submission",
+    "notes": [
+      "All tests should pass with at least 'acceptable' score (>= 60%)",
+      "High-risk scenarios require higher accuracy for safety",
+      "Tool usage is evaluated based on appropriateness to scenario",
+      "Cultural sensitivity is critical for Africa-focused deployment"
+    ]
+  }
+}
