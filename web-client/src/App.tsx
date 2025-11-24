@@ -14,7 +14,8 @@ interface ChatResponse {
   timestamp: string
 }
 
-const API_URL = import.meta.env.VITE_API_URL || '/api'
+// Use /api proxy path - nginx will forward to backend
+const API_URL = '/api'
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([
