@@ -55,6 +55,20 @@ services:
     restart: unless-stopped
     networks:
       - pregnancy-net
+  
+  web-client:
+    build:
+      context: ./web-client
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - agent
+    restart: unless-stopped
+    networks:
+      - pregnancy-net
+    environment:
+      - VITE_API_URL=http://agent:8000
 
 volumes:
   redis_data:
