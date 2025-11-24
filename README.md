@@ -1,6 +1,6 @@
 # Pregnancy Companion Agent
 
-A comprehensive pregnancy care agent built with Google Agent Development Kit (ADK).
+A comprehensive pregnancy care agent built with Google Agent Development Kit (ADK) with location-aware features for West Africa.
 
 ## Features
 
@@ -16,8 +16,19 @@ A comprehensive pregnancy care agent built with Google Agent Development Kit (AD
 - **Safety-First**: Medical safety guidelines with appropriate safety settings
 - **Evaluation**: LLM-as-a-Judge for assessing agent performance
 
+✅ **Location-Aware Features (NEW v2.0)**
+- **Country & Location Profile**: Captures and stores patient location data
+- **Country Inference**: Automatically infers country from location using Google Geocoding API
+- **Google Search Integration**: Real ADK built-in tool for nutrition guidance and medical information
+- **Health Facility Locator**: Finds nearby hospitals and clinics using Google Places API
+- **Road Accessibility**: Assesses travel time and distance to health facilities using Google Directions API
+- **Nutrition Guidance**: Uses Google Search to provide culturally-appropriate pregnancy nutrition advice
+- **Pre-Delivery Planning**: Proactive route planning for expectant mothers nearing due date
+
 ✅ **Technical Features**
 - Session and memory management (InMemorySessionService, InMemoryMemoryService)
+- Real Google Search tool from `google.adk.tools` (not simulated)
+- Custom Google Maps integration (Geocoding, Places, Directions APIs)
 - Comprehensive logging using Python's standard logging module
 - Proper error handling and fallbacks
 - Async/await support for modern Python applications
@@ -26,28 +37,43 @@ A comprehensive pregnancy care agent built with Google Agent Development Kit (AD
 
 ### Prerequisites
 - Python 3.10 or higher
-- Google ADK (`pip install google-adk`)
+- Google ADK (`pip install google-adk>=1.19.0`)
+- Google Cloud account (for Maps API - free tier available)
 
-### Setup
+### Quick Setup
 
-1. Install Google ADK:
+1. Install dependencies:
 ```bash
-pip install google-adk
+pip install -r requirements.txt
 ```
 
-2. Set up your API key:
+2. Set up API keys:
 ```bash
 # Copy the example env file
 cp .env.example .env
 
-# Edit .env and add your Google API key
-# Get your key from: https://aistudio.google.com/app/apikey
+# Edit .env and add your API keys:
+# - GOOGLE_API_KEY: Get from https://aistudio.google.com/app/apikey
+# - GOOGLE_MAPS_API_KEY: Get from https://console.cloud.google.com/
 ```
 
-3. Or set the environment variable:
+3. Enable Google Maps APIs (for location features):
+   - Go to https://console.cloud.google.com/
+   - Enable: Geocoding API, Places API, Directions API
+   - See [SETUP_LOCATION.md](SETUP_LOCATION.md) for detailed instructions
+
+### Alternative: Environment Variables
+
 ```bash
 export GOOGLE_API_KEY="your_api_key_here"
+export GOOGLE_MAPS_API_KEY="your_maps_api_key_here"  # Can be same as above
 ```
+
+### Documentation
+
+- **Quick Start**: See [QUICKSTART.md](QUICKSTART.md)
+- **Location Features**: See [LOCATION_FEATURES.md](LOCATION_FEATURES.md) 
+- **Location Setup**: See [SETUP_LOCATION.md](SETUP_LOCATION.md)
 
 ## Usage
 

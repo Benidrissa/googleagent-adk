@@ -16,11 +16,13 @@ import os
 import logging
 import datetime
 import json
-from typing import Dict, Any, Optional
+import requests
+from typing import Dict, Any, Optional, List
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.memory import InMemoryMemoryService
+from google.adk.tools import google_search
 from google.genai import types
 from google.genai.types import HarmCategory, HarmBlockThreshold
 
@@ -32,10 +34,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Get API key from environment
+# Get API keys from environment
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
 if GOOGLE_API_KEY == "YOUR_API_KEY_HERE":
     logger.warning("⚠️  GOOGLE_API_KEY not set. Please set it in your environment or .env file")
+
+# Google Maps API key (can be same as GOOGLE_API_KEY or separate)
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", GOOGLE_API_KEY)
+if GOOGLE_MAPS_API_KEY == "YOUR_API_KEY_HERE":
+    logger.warning("⚠️  GOOGLE_MAPS_API_KEY not set. Maps functionality will be limited.")
 
 MODEL_NAME = "gemini-2.0-flash-exp"
 
@@ -63,6 +70,7 @@ def calculate_edd(lmp_date: str) -> Dict[str, Any]:
         dict: Dictionary containing:
             - edd: Estimated due date in YYYY-MM-DD format
             - gestational_weeks: Current gestational age in weeks
+            - weeks_remaining: Weeks until due date
             - status: "success" or "error"
             - error_message: Error description if status is "error"
     """
@@ -70,13 +78,15 @@ def calculate_edd(lmp_date: str) -> Dict[str, Any]:
         lmp = datetime.datetime.strptime(lmp_date, "%Y-%m-%d")
         edd = lmp + datetime.timedelta(days=280)
         gestational_weeks = int((datetime.datetime.now() - lmp).days / 7)
+        weeks_remaining = max(0, 40 - gestational_weeks)
         
         logger.info(f"EDD calculated: {edd.strftime('%Y-%m-%d')} (LMP: {lmp_date}, {gestational_weeks} weeks)")
         
         return {
             "status": "success",
             "edd": edd.strftime("%Y-%m-%d"),
-            "gestational_weeks": gestational_weeks
+            "gestational_weeks": gestational_weeks,
+            "weeks_remaining": weeks_remaining
         }
     except ValueError as e:
         logger.error(f"Invalid date format for LMP: {lmp_date}")
@@ -89,6 +99,241 @@ def calculate_edd(lmp_date: str) -> Dict[str, Any]:
         return {
             "status": "error",
             "error_message": f"Error calculating EDD: {str(e)}"
+        }
+
+
+def infer_country_from_location(location: str) -> Dict[str, Any]:
+    """
+    Infers the country from a location string using geocoding.
+    
+    Args:
+        location: Location string (city, region, address, etc.)
+        
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - country: Inferred country name
+            - formatted_location: Full formatted address
+            - error_message: Error description if status is "error"
+    """
+    if not location or not location.strip():
+        return {"status": "error", "error_message": "Location cannot be empty"}
+    
+    try:
+        # Use Google Maps Geocoding API
+        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        params = {
+            "address": location,
+            "key": GOOGLE_MAPS_API_KEY
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data["status"] == "OK" and data["results"]:
+            result = data["results"][0]
+            
+            # Extract country from address components
+            country = None
+            for component in result.get("address_components", []):
+                if "country" in component.get("types", []):
+                    country = component.get("long_name")
+                    break
+            
+            logger.info(f"Inferred country '{country}' from location '{location}'")
+            
+            return {
+                "status": "success",
+                "country": country,
+                "formatted_location": result.get("formatted_address", location)
+            }
+        else:
+            logger.warning(f"Could not geocode location: {location}")
+            return {
+                "status": "error",
+                "error_message": f"Could not determine country from location: {location}"
+            }
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Geocoding API error: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error contacting geocoding service: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error in geocoding: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Unexpected error: {str(e)}"
+        }
+
+
+def find_nearby_health_facilities(location: str, radius_meters: int = 5000) -> Dict[str, Any]:
+    """
+    Finds nearby health facilities (hospitals, clinics, maternity centers) using Google Places API.
+    
+    Args:
+        location: Location string (city, address, coordinates)
+        radius_meters: Search radius in meters (default: 5000 = 5km)
+        
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - facilities: List of nearby health facilities with details
+            - count: Number of facilities found
+            - error_message: Error description if status is "error"
+    """
+    try:
+        # First, geocode the location to get coordinates
+        geocode_url = "https://maps.googleapis.com/maps/api/geocode/json"
+        geocode_params = {
+            "address": location,
+            "key": GOOGLE_MAPS_API_KEY
+        }
+        
+        geocode_response = requests.get(geocode_url, params=geocode_params, timeout=10)
+        geocode_response.raise_for_status()
+        geocode_data = geocode_response.json()
+        
+        if geocode_data["status"] != "OK" or not geocode_data["results"]:
+            return {
+                "status": "error",
+                "error_message": f"Could not find location: {location}"
+            }
+        
+        lat_lng = geocode_data["results"][0]["geometry"]["location"]
+        location_str = f"{lat_lng['lat']},{lat_lng['lng']}"
+        
+        # Search for health facilities
+        places_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        places_params = {
+            "location": location_str,
+            "radius": radius_meters,
+            "type": "hospital",  # Also matches clinics and health centers
+            "key": GOOGLE_MAPS_API_KEY
+        }
+        
+        places_response = requests.get(places_url, params=places_params, timeout=10)
+        places_response.raise_for_status()
+        places_data = places_response.json()
+        
+        if places_data["status"] != "OK" and places_data["status"] != "ZERO_RESULTS":
+            return {
+                "status": "error",
+                "error_message": f"Places API error: {places_data.get('status')}"
+            }
+        
+        facilities = []
+        for place in places_data.get("results", [])[:10]:  # Limit to top 10
+            facility = {
+                "name": place.get("name"),
+                "address": place.get("vicinity"),
+                "rating": place.get("rating"),
+                "open_now": place.get("opening_hours", {}).get("open_now"),
+                "types": place.get("types", []),
+            }
+            facilities.append(facility)
+        
+        logger.info(f"Found {len(facilities)} health facilities near {location}")
+        
+        return {
+            "status": "success",
+            "facilities": facilities,
+            "count": len(facilities),
+            "search_location": location,
+            "search_radius_km": radius_meters / 1000
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Places API error: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error contacting Places API: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error finding facilities: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Unexpected error: {str(e)}"
+        }
+
+
+def assess_road_accessibility(location: str, destination: str = None) -> Dict[str, Any]:
+    """
+    Assesses road accessibility and travel information between locations.
+    Useful for planning trips to health facilities near due date.
+    
+    Args:
+        location: Starting location (patient's location)
+        destination: Destination (health facility). If None, finds nearest hospital
+        
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - distance: Distance in kilometers
+            - duration: Travel time
+            - route_available: Whether a route exists
+            - travel_mode: Mode of transportation
+            - error_message: Error description if status is "error"
+    """
+    try:
+        # If no destination, find nearest hospital first
+        if not destination:
+            facilities_result = find_nearby_health_facilities(location, radius_meters=10000)
+            if facilities_result["status"] == "success" and facilities_result["count"] > 0:
+                destination = facilities_result["facilities"][0]["address"]
+            else:
+                return {
+                    "status": "error",
+                    "error_message": "No health facilities found nearby for route planning"
+                }
+        
+        # Use Google Maps Directions API
+        directions_url = "https://maps.googleapis.com/maps/api/directions/json"
+        params = {
+            "origin": location,
+            "destination": destination,
+            "mode": "driving",
+            "key": GOOGLE_MAPS_API_KEY
+        }
+        
+        response = requests.get(directions_url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data["status"] != "OK" or not data.get("routes"):
+            return {
+                "status": "error",
+                "error_message": f"No route found between locations. Status: {data.get('status')}"
+            }
+        
+        route = data["routes"][0]
+        leg = route["legs"][0]
+        
+        logger.info(f"Route assessed from {location} to {destination}")
+        
+        return {
+            "status": "success",
+            "distance": leg["distance"]["text"],
+            "duration": leg["duration"]["text"],
+            "route_available": True,
+            "travel_mode": "driving",
+            "start_address": leg["start_address"],
+            "end_address": leg["end_address"]
+        }
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Directions API error: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error contacting Directions API: {str(e)}"
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error assessing accessibility: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Unexpected error: {str(e)}"
         }
 
 
@@ -106,11 +351,11 @@ SAFETY_SETTINGS = {
 # NURSE AGENT - Agent-as-a-Tool for Risk Assessment
 # ============================================================================
 
-# Create a specialized Nurse Agent for risk assessment
+# Create a specialized Nurse Agent for risk assessment with location and search tools
 nurse_agent = LlmAgent(
     model=MODEL_NAME,
     name="nurse_agent",
-    description="Senior Midwife specialist that assesses pregnancy risk levels based on patient symptoms and history",
+    description="Senior Midwife specialist that assesses pregnancy risk levels, locates health facilities, and searches medical information",
     instruction="""
 You are a Senior Midwife with expertise in pregnancy risk assessment.
 
@@ -134,16 +379,29 @@ ASSESSMENT PROTOCOL:
    - MODERATE RISK: Advanced maternal age, previous c-section, minor concerning symptoms
    - LOW RISK: Normal pregnancy progress, no concerning symptoms
 
+LOCATION-BASED ASSISTANCE:
+- When a patient needs medical attention, use find_nearby_health_facilities tool
+- Use the patient's location/country from their profile
+- Prioritize facilities with good ratings and emergency capabilities
+- Provide clear facility names, addresses, and contact information
+
+RESEARCH CAPABILITIES:
+- Use google_search tool to find current medical guidelines when needed
+- Search for condition-specific information for better assessments
+- Verify latest pregnancy care recommendations
+
 RESPONSE FORMAT:
 Always respond with a clear JSON structure:
 {
   "risk_level": "Low|Moderate|High",
   "reasoning": "Step-by-step explanation of your assessment",
-  "advice": "Clear, actionable advice for the patient"
+  "advice": "Clear, actionable advice for the patient",
+  "nearest_facilities": "List of nearby health facilities if applicable"
 }
 
 Be professional, compassionate, and always prioritize patient safety.
 """,
+    tools=[google_search, find_nearby_health_facilities],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2,  # Lower temperature for more consistent medical assessments
         safety_settings=[
@@ -151,7 +409,8 @@ Be professional, compassionate, and always prioritize patient safety.
                 category=cat,
                 threshold=HarmBlockThreshold.BLOCK_NONE
             ) for cat in SAFETY_SETTINGS.keys()
-        ]
+        ],
+        bypass_multi_tools_limit=True  # Allow google_search with custom tools
     )
 )
 
@@ -165,31 +424,49 @@ logger.info("✅ Nurse Agent created for risk assessment")
 # Import AgentTool to use nurse_agent as a tool
 from google.adk.tools import AgentTool
 
-# Create the main Pregnancy Companion Agent
+# Create the main Pregnancy Companion Agent with enhanced location and search capabilities
 root_agent = LlmAgent(
     model=MODEL_NAME,
     name="pregnancy_companion",
-    description="Pregnancy care companion providing support for pregnant women with memory, risk assessment, and medical guidance",
+    description="Pregnancy care companion with location awareness, nutrition guidance, and health facility information",
     instruction="""
 You are the 'Pregnancy Companion', a specialized medical AI providing support for pregnant women in West Africa.
 
 YOUR ROLE:
 You provide caring, evidence-based pregnancy support while prioritizing patient safety.
-You have access to patient history through the session state and can perform calculations and risk assessments.
+You have access to patient history through the session state and can perform calculations, risk assessments,
+location-based assistance, and nutrition research.
 
 OPERATIONAL PROTOCOL:
 
-1. **Patient Identification & History**:
-   - Check if you know the patient (Name, Age, LMP/Last Menstrual Period)
-   - If information is missing, ask politely and clearly
+1. **Patient Identification & Profile**:
+   - Check if you know the patient (Name, Age, LMP, Country, Location)
+   - If location/country is missing, ask politely: "Where are you located so I can provide local information?"
+   - If country is not provided but location is, use infer_country_from_location tool
+   - Store location and country in patient profile for future reference
    - Use simple language - avoid medical jargon, acronyms, and complex terms
 
 2. **Calculate EDD (Due Date)**:
    - When the patient provides their LMP date, use the `calculate_edd` tool
    - The tool expects date format: YYYY-MM-DD (e.g., "2025-05-01")
    - Share the results in a friendly, understandable way
+   - Note the weeks_remaining for travel planning purposes
 
-3. **Risk Assessment - CRITICAL PROTOCOL**:
+3. **Nutrition Information via Google Search**:
+   - Use google_search tool to find relevant nutrition information for pregnant women
+   - Search for culturally appropriate foods available in the patient's country/location
+   - Topics to search: pregnancy-safe foods, nutrients by trimester, foods to avoid, traditional pregnancy diets
+   - Provide evidence-based nutrition advice tailored to local context
+   - Examples: "pregnancy nutrition West Africa", "iron-rich foods pregnancy Mali", "foods to avoid pregnancy"
+
+4. **Road Accessibility Assessment**:
+   - As due date approaches (weeks_remaining < 4), proactively assess road accessibility
+   - Use assess_road_accessibility tool with patient's location
+   - Provide travel time and distance to nearest hospital
+   - Advise on planning transportation in advance
+   - Consider local conditions (rainy season, road quality)
+
+5. **Risk Assessment - CRITICAL PROTOCOL**:
    - If the patient mentions ANY of these symptoms, you MUST call the `nurse_agent` tool:
      * Bleeding (any amount)
      * Dizziness, spots in vision, or fainting
@@ -200,7 +477,7 @@ OPERATIONAL PROTOCOL:
      * Severe swelling
    
    - When using `nurse_agent`, provide:
-     * Patient summary (age, gestational week, relevant history)
+     * Patient summary (age, gestational week, location, relevant history)
      * Current symptoms described by the patient
    
    - After receiving the nurse's assessment:
@@ -209,14 +486,14 @@ OPERATIONAL PROTOCOL:
      * If MODERATE RISK: Recommend scheduling appointment soon
      * If LOW RISK: Provide reassurance and general advice
 
-4. **Communication Style**:
+6. **Communication Style**:
    - Use simple, caring language
    - Avoid medical jargon, acronyms, and abbreviations
    - Be culturally sensitive and respectful
    - Provide clear, actionable guidance
    - Never be alarmist, but be honest about risks
 
-5. **Safety First**:
+7. **Safety First**:
    - Always prioritize patient safety
    - When in doubt, recommend consulting healthcare provider
    - Provide emergency contact information for high-risk situations
@@ -225,6 +502,9 @@ REMEMBER: You are a support companion, not a replacement for medical care.
 """,
     tools=[
         calculate_edd,
+        infer_country_from_location,
+        assess_road_accessibility,
+        google_search,
         AgentTool(agent=nurse_agent)  # Nurse agent as a tool for risk assessment
     ],
     generate_content_config=types.GenerateContentConfig(
@@ -235,7 +515,8 @@ REMEMBER: You are a support companion, not a replacement for medical care.
                 category=cat,
                 threshold=HarmBlockThreshold.BLOCK_NONE
             ) for cat in SAFETY_SETTINGS.keys()
-        ]
+        ],
+        bypass_multi_tools_limit=True  # Allow google_search with custom tools
     )
 )
 
@@ -448,15 +729,15 @@ Provide your evaluation as JSON:
 async def run_demo():
     """
     Run a complete demo showing all agent capabilities.
-    This demonstrates: memory, tools, agent-as-a-tool, safety, and evaluation.
+    This demonstrates: memory, tools, agent-as-a-tool, location features, nutrition search, and evaluation.
     """
     print("\n" + "="*70)
-    print("PREGNANCY COMPANION AGENT - DEMO")
-    print("Google ADK Compliant Implementation")
+    print("PREGNANCY COMPANION AGENT - ENHANCED DEMO")
+    print("Google ADK Compliant Implementation with Location & Search")
     print("="*70 + "\n")
     
     # Use a consistent session for the demo
-    demo_session_id = "demo_amina_session"
+    demo_session_id = "demo_amina_session_enhanced"
     demo_user_id = "amina_demo"
     
     # Create session
@@ -467,54 +748,67 @@ async def run_demo():
     )
     
     print("👤 Patient: Amina (17 years old)")
-    print("📍 Location: West Africa")
+    print("📍 Demonstrating NEW location-aware features")
     print("="*70 + "\n")
     
-    # Turn 1: Introduction and History
-    print("--- TURN 1: PATIENT INTRODUCTION ---\n")
+    # Turn 1: Introduction with Location
+    print("--- TURN 1: PATIENT INTRODUCTION WITH LOCATION ---\n")
     response1 = await run_agent_interaction(
-        "My name is Amina. I am 17. My LMP was May 1st 2025. I had a hemorrhage in my last birth.",
+        "My name is Amina. I am 17. My LMP was May 1st 2025. I live in Bamako, Mali. I had a hemorrhage in my last birth.",
         user_id=demo_user_id,
         session_id=demo_session_id
     )
     print(f"🤖 COMPANION: {response1}\n")
     
-    # Turn 2: Symptom Check (Should trigger Nurse Agent consultation)
-    print("\n--- TURN 2: DANGER SIGNS (Risk Assessment) ---\n")
+    # Turn 2: Nutrition Advice (Uses Google Search)
+    print("\n--- TURN 2: NUTRITION GUIDANCE (Google Search Tool) ---\n")
     response2 = await run_agent_interaction(
-        "I am feeling dizzy and seeing spots.",
+        "What foods should I eat for my pregnancy? I want to know what's good for me and my baby.",
         user_id=demo_user_id,
         session_id=demo_session_id
     )
     print(f"🤖 COMPANION: {response2}\n")
     
-    # Turn 3: EDD Calculation
-    print("\n--- TURN 3: CALCULATE DUE DATE ---\n")
+    # Turn 3: EDD Calculation with Road Accessibility
+    print("\n--- TURN 3: DUE DATE & TRAVEL PLANNING ---\n")
     response3 = await run_agent_interaction(
-        "When is my baby due?",
+        "When is my baby due? How far is the nearest hospital from my location?",
         user_id=demo_user_id,
         session_id=demo_session_id
     )
     print(f"🤖 COMPANION: {response3}\n")
     
-    # Evaluate Turn 2 (Risk Assessment)
-    print("\n--- EVALUATION: RISK ASSESSMENT INTERACTION ---\n")
+    # Turn 4: Symptom Check (Should trigger Nurse Agent with Location)
+    print("\n--- TURN 4: DANGER SIGNS WITH HEALTH FACILITY SEARCH ---\n")
+    response4 = await run_agent_interaction(
+        "I am feeling dizzy and seeing spots. I need help urgently. Where can I go?",
+        user_id=demo_user_id,
+        session_id=demo_session_id
+    )
+    print(f"🤖 COMPANION: {response4}\n")
+    
+    # Evaluate Turn 4 (Location-aware Risk Assessment)
+    print("\n--- EVALUATION: LOCATION-AWARE RISK ASSESSMENT ---\n")
     evaluation = await evaluate_interaction(
-        user_input="I am feeling dizzy and seeing spots.",
-        agent_response=response2,
-        expected_behavior="Agent should recognize danger signs and consult nurse agent for risk assessment. Should communicate results clearly and recommend urgent care if high risk."
+        user_input="I am feeling dizzy and seeing spots. I need help urgently. Where can I go?",
+        agent_response=response4,
+        expected_behavior="Agent should recognize danger signs, consult nurse agent with location info, provide nearby health facilities, and communicate urgency clearly."
     )
     
     print(f"📊 Evaluation Score: {evaluation.get('score', 'N/A')}/10")
     print(f"📋 Reasoning: {evaluation.get('reasoning', 'N/A')}\n")
     
     print("="*70)
-    print("DEMO COMPLETE")
+    print("ENHANCED DEMO COMPLETE")
     print("="*70)
     print("\n✅ All features demonstrated:")
     print("  ✓ Session and memory management (ADK SessionService)")
-    print("  ✓ Patient context retention across turns")
+    print("  ✓ Patient context retention with location/country")
+    print("  ✓ Country inference from location (Custom tool)")
     print("  ✓ EDD calculation tool (ADK function tool)")
+    print("  ✓ Google Search for nutrition guidance (ADK built-in tool)")
+    print("  ✓ Health facility location search (Google Places API)")
+    print("  ✓ Road accessibility assessment (Google Directions API)")
     print("  ✓ Nurse agent consultation (Agent-as-a-Tool)")
     print("  ✓ Safety-first medical guidance")
     print("  ✓ Risk assessment and triage")
