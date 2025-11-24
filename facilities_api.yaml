@@ -1,0 +1,347 @@
+openapi: 3.0.0
+info:
+  title: Health Facilities API
+  description: API for finding nearby health facilities including hospitals, clinics, and maternity centers
+  version: 1.0.0
+  contact:
+    name: Pregnancy Companion Agent
+    email: support@pregnancy-companion.example.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /facilities:
+    get:
+      summary: Find nearby health facilities
+      description: Returns a list of health facilities within a specified radius of a geographic location
+      operationId: getNearbyFacilities
+      parameters:
+        - name: lat
+          in: query
+          description: Latitude of the search location
+          required: true
+          schema:
+            type: number
+            format: float
+            example: 6.5244
+        - name: long
+          in: query
+          description: Longitude of the search location
+          required: true
+          schema:
+            type: number
+            format: float
+            example: 3.3792
+        - name: radius
+          in: query
+          description: Search radius in meters
+          required: false
+          schema:
+            type: integer
+            default: 5000
+            minimum: 100
+            maximum: 50000
+            example: 5000
+        - name: type
+          in: query
+          description: Filter by facility type
+          required: false
+          schema:
+            type: string
+            enum: [hospital, clinic, maternity, emergency, all]
+            default: all
+      responses:
+        '200':
+          description: Successful response with list of facilities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                    example: success
+                  count:
+                    type: integer
+                    description: Number of facilities found
+                    example: 3
+                  search_location:
+                    type: object
+                    properties:
+                      latitude:
+                        type: number
+                        format: float
+                      longitude:
+                        type: number
+                        format: float
+                      radius_meters:
+                        type: integer
+                  facilities:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Facility'
+              examples:
+                lagos_facilities:
+                  summary: Health facilities near Lagos
+                  value:
+                    status: success
+                    count: 3
+                    search_location:
+                      latitude: 6.5244
+                      longitude: 3.3792
+                      radius_meters: 5000
+                    facilities:
+                      - id: "fac_001"
+                        name: "Lagos University Teaching Hospital"
+                        type: hospital
+                        address: "Idi-Araba, Lagos, Nigeria"
+                        coordinates:
+                          latitude: 6.5050
+                          longitude: 3.3700
+                        distance_meters: 1200
+                        rating: 4.2
+                        services:
+                          - emergency
+                          - maternity
+                          - general
+                        emergency_available: true
+                        open_24_7: true
+                        phone: "+234-1-234-5678"
+                      - id: "fac_002"
+                        name: "Lagos Island Maternity Hospital"
+                        type: maternity
+                        address: "Broad Street, Lagos Island, Nigeria"
+                        coordinates:
+                          latitude: 6.4500
+                          longitude: 3.3900
+                        distance_meters: 2300
+                        rating: 4.0
+                        services:
+                          - maternity
+                          - prenatal_care
+                        emergency_available: true
+                        open_24_7: true
+                        phone: "+234-1-234-5679"
+                      - id: "fac_003"
+                        name: "Mainland Hospital Yaba"
+                        type: hospital
+                        address: "Yaba, Lagos, Nigeria"
+                        coordinates:
+                          latitude: 6.5100
+                          longitude: 3.3700
+                        distance_meters: 3100
+                        rating: 3.8
+                        services:
+                          - emergency
+                          - general
+                        emergency_available: true
+                        open_24_7: false
+                        phone: "+234-1-234-5680"
+        '400':
+          description: Bad request - invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                status: error
+                error_code: INVALID_COORDINATES
+                message: "Invalid latitude or longitude values"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                status: error
+                error_code: INTERNAL_ERROR
+                message: "An unexpected error occurred"
+
+  /facilities/{facility_id}:
+    get:
+      summary: Get detailed facility information
+      description: Returns detailed information about a specific health facility
+      operationId: getFacilityById
+      parameters:
+        - name: facility_id
+          in: path
+          description: Unique identifier of the facility
+          required: true
+          schema:
+            type: string
+            example: "fac_001"
+      responses:
+        '200':
+          description: Successful response with facility details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [success]
+                  facility:
+                    $ref: '#/components/schemas/FacilityDetailed'
+        '404':
+          description: Facility not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                status: error
+                error_code: NOT_FOUND
+                message: "Facility with ID 'fac_001' not found"
+
+components:
+  schemas:
+    Facility:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - address
+        - coordinates
+      properties:
+        id:
+          type: string
+          description: Unique facility identifier
+          example: "fac_001"
+        name:
+          type: string
+          description: Name of the health facility
+          example: "Lagos University Teaching Hospital"
+        type:
+          type: string
+          enum: [hospital, clinic, maternity, pharmacy, laboratory]
+          description: Type of health facility
+          example: hospital
+        address:
+          type: string
+          description: Full address of the facility
+          example: "Idi-Araba, Lagos, Nigeria"
+        coordinates:
+          type: object
+          required:
+            - latitude
+            - longitude
+          properties:
+            latitude:
+              type: number
+              format: float
+              example: 6.5050
+            longitude:
+              type: number
+              format: float
+              example: 3.3700
+        distance_meters:
+          type: integer
+          description: Distance from search location in meters
+          example: 1200
+        rating:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 5
+          description: User rating (0-5 stars)
+          example: 4.2
+        services:
+          type: array
+          items:
+            type: string
+          description: List of services offered
+          example: ["emergency", "maternity", "general"]
+        emergency_available:
+          type: boolean
+          description: Whether emergency services are available
+          example: true
+        open_24_7:
+          type: boolean
+          description: Whether the facility operates 24/7
+          example: true
+        phone:
+          type: string
+          description: Contact phone number
+          example: "+234-1-234-5678"
+
+    FacilityDetailed:
+      allOf:
+        - $ref: '#/components/schemas/Facility'
+        - type: object
+          properties:
+            operating_hours:
+              type: object
+              description: Operating hours for each day of the week
+              properties:
+                monday:
+                  type: string
+                  example: "24 hours"
+                tuesday:
+                  type: string
+                  example: "24 hours"
+                wednesday:
+                  type: string
+                  example: "24 hours"
+                thursday:
+                  type: string
+                  example: "24 hours"
+                friday:
+                  type: string
+                  example: "24 hours"
+                saturday:
+                  type: string
+                  example: "24 hours"
+                sunday:
+                  type: string
+                  example: "24 hours"
+            departments:
+              type: array
+              items:
+                type: string
+              description: List of departments available
+              example: ["Obstetrics", "Gynecology", "Pediatrics", "Emergency"]
+            staff_count:
+              type: integer
+              description: Approximate number of medical staff
+              example: 250
+            bed_capacity:
+              type: integer
+              description: Total bed capacity
+              example: 300
+            accepts_insurance:
+              type: boolean
+              description: Whether the facility accepts health insurance
+              example: true
+            parking_available:
+              type: boolean
+              description: Whether parking is available
+              example: true
+            wheelchair_accessible:
+              type: boolean
+              description: Whether the facility is wheelchair accessible
+              example: true
+
+    Error:
+      type: object
+      required:
+        - status
+        - error_code
+        - message
+      properties:
+        status:
+          type: string
+          enum: [error]
+        error_code:
+          type: string
+          description: Machine-readable error code
+          example: INVALID_COORDINATES
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Invalid latitude or longitude values"
