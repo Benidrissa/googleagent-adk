@@ -1,12 +1,28 @@
 version: '3.8'
 
 services:
+  traefik:
+    image: traefik:v2.10
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.api.address=:8000"
+    ports:
+      - "80:80"
+      - "8000:8000"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - pregnancy-net
+    restart: unless-stopped
+
   agent:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
     environment:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - REDIS_URL=redis://redis:6379
@@ -14,11 +30,19 @@ services:
     depends_on:
       - redis
       - postgres
+      - traefik
     volumes:
       - ./data:/app/data
     restart: unless-stopped
     networks:
       - pregnancy-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agent.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.agent.entrypoints=api"
+      - "traefik.http.services.agent.loadbalancer.server.port=8000"
+      - "traefik.http.middlewares.agent-strip.stripprefix.prefixes=/api"
+      - "traefik.http.routers.agent.middlewares=agent-strip"
   
   redis:
     image: redis:7-alpine
@@ -60,15 +84,19 @@ services:
     build:
       context: ./web-client
       dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
     depends_on:
       - agent
+      - traefik
     restart: unless-stopped
     networks:
       - pregnancy-net
     environment:
-      - VITE_API_URL=http://agent:8000
+      - VITE_API_URL=http://localhost:8000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.webclient.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.webclient.entrypoints=web"
+      - "traefik.http.services.webclient.loadbalancer.server.port=3000"
 
 volumes:
   redis_data:
