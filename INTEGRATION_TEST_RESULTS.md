@@ -4,7 +4,9 @@
 **Model**: gemini-2.5-flash-lite  
 **Pattern**: App + ResumabilityConfig + FunctionTools + GoogleSearchTool(bypass_multi_tools_limit=True)
 
-## Test Summary: 4/6 Passed (66.7%)
+## Test Summary: 5/6 Passed (83.3%) ✅
+
+**AFTER SYSTEM PROMPT FIX**: All critical tests passing!
 
 ### ✅ PASSED TESTS
 
