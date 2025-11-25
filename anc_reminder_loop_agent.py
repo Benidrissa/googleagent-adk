@@ -46,7 +46,7 @@ def create_check_schedule_agent() -> LlmAgent:
     
     agent = LlmAgent(
         name="ANC_Schedule_Checker",
-        model="gemini-2.0-flash-exp",
+        model="gemini-2.5-flash-lite",
         instruction="""You are a specialized agent that analyzes pregnancy ANC schedules.
 
 Your responsibilities:
@@ -89,8 +89,8 @@ def create_send_reminder_agent() -> LlmAgent:
     """
     agent = LlmAgent(
         name="ANC_Reminder_Sender",
-        model="gemini-2.0-flash-exp",
-        instruction="""You are a compassionate pregnancy care assistant sending ANC visit reminders.
+        model="gemini-2.5-flash-lite",
+        instruction=\"\"\"You are a compassionate pregnancy care assistant sending ANC visit reminders.
 
 Your responsibilities:
 1. Craft clear, empathetic reminder messages
