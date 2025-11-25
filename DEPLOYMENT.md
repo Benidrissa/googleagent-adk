@@ -2,7 +2,234 @@
 
 ## Quick Deployment Options
 
-### Option 1: Google Cloud Run (Recommended)
+### Option 1: Docker Compose (Recommended for Development & Testing)
+
+The fastest way to deploy the complete stack locally or on a server.
+
+#### Prerequisites
+- Docker Engine 20.10+
+- Docker Compose 2.0+
+- 4GB RAM minimum
+- Ports available: 80, 8000, 8080, 5432, 6379
+
+#### Quick Start
+
+```bash
+# 1. Clone repository
+git clone <repository-url>
+cd googleagent-adk
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and add your GOOGLE_API_KEY
+
+# 3. Start all services
+docker-compose up -d
+
+# 4. Verify deployment
+docker-compose ps
+curl http://localhost:8000/health
+```
+
+#### Services Included
+
+| Service | Description | Port | URL |
+|---------|-------------|------|-----|
+| **web-client** | React UI | 80 | http://localhost |
+| **agent** | FastAPI server | 8000 | http://localhost:8000 |
+| **traefik** | Reverse proxy | 80, 8080 | http://localhost:8080 |
+| **postgres** | Database | 5432 | Internal |
+| **redis** | Cache | 6379 | Internal |
+| **mcp_server** | MCP tools | - | Internal |
+
+#### Configuration
+
+**Environment Variables (.env)**
+```bash
+# Required
+GOOGLE_API_KEY=AIzaSy...
+GOOGLE_MAPS_API_KEY=AIzaSy...
+
+# Optional
+MODEL_NAME=gemini-2.0-flash-exp
+LOG_LEVEL=INFO
+DATABASE_URL=postgresql://postgres:postgres@postgres:5432/pregnancy_db
+REDIS_URL=redis://redis:6379/0
+```
+
+**Docker Compose Override (docker-compose.override.yml)**
+```yaml
+version: '3.8'
+services:
+  agent:
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    ports:
+      - "8001:8000"  # Expose additional port
+```
+
+#### Management Commands
+
+```bash
+# View logs
+docker-compose logs -f agent
+docker-compose logs -f web-client
+
+# Restart services
+docker-compose restart agent
+
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (fresh start)
+docker-compose down -v
+
+# Update images
+docker-compose pull
+docker-compose up -d --build
+
+# Scale services
+docker-compose up -d --scale agent=3
+```
+
+#### Health Checks
+
+```bash
+# Check all services
+docker-compose ps
+
+# Test API endpoint
+curl http://localhost:8000/health
+
+# Test web client
+curl http://localhost
+
+# Check Traefik dashboard
+open http://localhost:8080
+```
+
+#### Troubleshooting
+
+**Issue**: Port already in use
+```bash
+# Find what's using the port
+sudo lsof -i :80
+sudo lsof -i :6379
+
+# Stop conflicting service
+docker stop <container-name>
+```
+
+**Issue**: Services not starting
+```bash
+# Check logs
+docker-compose logs
+
+# Rebuild images
+docker-compose up -d --build --force-recreate
+```
+
+**Issue**: Out of memory
+```bash
+# Check Docker resources
+docker stats
+
+# Increase Docker memory limit (Docker Desktop)
+# Settings > Resources > Memory > 4GB+
+```
+
+**Issue**: Database connection failed
+```bash
+# Reset database
+docker-compose down -v
+docker-compose up -d postgres
+sleep 10
+docker-compose up -d agent
+```
+
+#### Production Deployment with Docker
+
+For production deployment on a VPS/server:
+
+```bash
+# 1. Install Docker on server (Ubuntu example)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+
+# 2. Install Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+# 3. Clone and deploy
+git clone <repository-url>
+cd googleagent-adk
+cp .env.example .env
+nano .env  # Add your API keys
+
+# 4. Start services
+docker-compose up -d
+
+# 5. Enable auto-restart
+docker update --restart=always $(docker-compose ps -q)
+
+# 6. Set up firewall
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+#### SSL/HTTPS Setup with Let's Encrypt
+
+Add to `docker-compose.yml`:
+
+```yaml
+services:
+  traefik:
+    command:
+      - "--certificatesresolvers.letsencrypt.acme.email=your@email.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    volumes:
+      - ./letsencrypt:/letsencrypt
+    labels:
+      - "traefik.http.routers.web-secure.tls.certresolver=letsencrypt"
+```
+
+#### Monitoring & Logs
+
+```bash
+# View real-time logs
+docker-compose logs -f --tail=100
+
+# Export logs
+docker-compose logs > deployment-logs-$(date +%Y%m%d).txt
+
+# Monitor resource usage
+docker stats
+
+# Check service health
+watch -n 5 'docker-compose ps'
+```
+
+#### Backup & Restore
+
+```bash
+# Backup database
+docker-compose exec postgres pg_dump -U postgres pregnancy_db > backup-$(date +%Y%m%d).sql
+
+# Restore database
+docker-compose exec -T postgres psql -U postgres pregnancy_db < backup-20251125.sql
+
+# Backup all data volumes
+docker run --rm -v googleagent-adk_postgres_data:/data -v $(pwd):/backup ubuntu tar czf /backup/data-backup-$(date +%Y%m%d).tar.gz /data
+```
+
+---
+
+### Option 2: Google Cloud Run (Cloud Deployment)
 
 Cloud Run provides serverless deployment with automatic scaling.
 
