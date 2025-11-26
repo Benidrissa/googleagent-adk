@@ -51,7 +51,7 @@ def test_nurse_agent_emergency():
     # First establish patient context
     send_message(
         session_id,
-        "My name is Fatima. I am 22. My LMP was March 15, 2025. I live in Dakar, Senegal.",
+        "My name is Fatima, phone +221 77 123 4567. I am 22. My LMP was March 15, 2025. I live in Dakar, Senegal.",
     )
 
     # Report emergency symptoms that should trigger nurse agent
@@ -128,7 +128,7 @@ def test_session_persistence():
     # First message - establish context
     response1 = send_message(
         session_id,
-        "Hi, my name is Aisha. I am 19 years old. My LMP was April 10, 2025.",
+        "Hi, my name is Aisha, phone +233 20 999 8888. I am 19 years old. My LMP was April 10, 2025.",
     )
 
     # Second message - reference previous context without repeating
@@ -161,7 +161,7 @@ def test_memory_across_sessions():
     session_id_1 = f"memory_test_1_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     response1 = send_message(
         session_id_1,
-        "My name is Mariama. I am 25. My LMP was May 20, 2025. I live in Abidjan, Ivory Coast.",
+        "My name is Mariama, phone +225 07 444 5555. I am 25. My LMP was May 20, 2025. I live in Abidjan, Ivory Coast.",
     )
 
     # Wait a moment
@@ -205,7 +205,7 @@ def test_combined_nurse_and_search():
     # Establish context
     send_message(
         session_id,
-        "I'm Zainab, 28 years old, LMP was June 1, 2025, living in Accra, Ghana.",
+        "I'm Zainab, phone +233 24 555 1234, 28 years old, LMP was June 1, 2025, living in Accra, Ghana.",
     )
 
     # Report moderate symptoms and ask for information
@@ -289,6 +289,7 @@ def test_phone_based_lookup():
 
     # Wait a bit for database write
     import time
+
     time.sleep(2)
 
     # NEW session - patient returns with just phone number
