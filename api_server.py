@@ -14,9 +14,23 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
 
-# Configure logging first
+# Configure logging first - both console and file
+import os
+from pathlib import Path
+
+# Ensure log directory exists
+log_dir = Path("/app/data")
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / "api_server.log"
+
+# Configure logging with both console and file handlers
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler(log_file, mode='a')  # File output
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -101,7 +115,9 @@ async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
     # Startup
     logger.info("🚀 Starting Pregnancy Companion API Server")
-    logger.info("📋 Endpoints available: /health, /chat, /logs, /evaluation/results, /callback/loop")
+    logger.info(
+        "📋 Endpoints available: /health, /chat, /logs, /evaluation/results, /callback/loop"
+    )
     yield
     # Shutdown
     logger.info("🛑 Shutting down Pregnancy Companion API Server")
@@ -157,40 +173,41 @@ async def health():
 async def get_logs(level: Optional[str] = None, limit: int = 100):
     """
     Get recent agent logs with OpenTelemetry trace information.
-    
+
     Args:
         level: Filter by log level (ERROR, WARNING, INFO, DEBUG)
         limit: Maximum number of logs to return (default: 100)
-    
+
     Returns:
         JSON with logs array containing trace IDs, timestamps, and tool information
     """
     import json
     import os
     from pathlib import Path
-    
+
     logs = []
-    
+
     # Try to read from actual log files (try multiple locations)
     log_files = [
-        Path("api_server.log"),  # Primary location
-        Path("data/agent.log"),  # Alternative location
+        Path("/app/data/api_server.log"),  # Primary location
+        Path("data/api_server.log"),  # Alternative location
+        Path("api_server.log"),  # Relative location
     ]
-    
+
     log_file = None
     for lf in log_files:
         if lf.exists():
             log_file = lf
             break
-    
+
     if log_file:
         try:
-            with open(log_file, 'r') as f:
+            with open(log_file, "r") as f:
                 lines = f.readlines()[-limit:]  # Get last N lines
                 for line in lines:
                     try:
                         # Parse log line format: timestamp - logger_name - level - message
-                        parts = line.strip().split(' - ', 3)
+                        parts = line.strip().split(" - ", 3)
                         if len(parts) >= 4:
                             log_entry = {
                                 "timestamp": parts[0],
@@ -201,11 +218,15 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
                                 "span_id": None,
                                 "tool_name": None,
                                 "tool_args": None,
-                                "tool_response": None
+                                "tool_response": None,
                             }
-                            
+
                             # Filter by level if specified
-                            if not level or level.upper() == "ALL" or parts[2] == level.upper():
+                            if (
+                                not level
+                                or level.upper() == "ALL"
+                                or parts[2] == level.upper()
+                            ):
                                 logs.append(log_entry)
                         elif len(parts) >= 2:
                             # Fallback for lines that don't match standard format
@@ -213,19 +234,19 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
                                 "timestamp": parts[0] if len(parts) > 0 else "",
                                 "logger": "",
                                 "level": "INFO",
-                                "message": ' - '.join(parts[1:]),
+                                "message": " - ".join(parts[1:]),
                                 "trace_id": None,
                                 "span_id": None,
                                 "tool_name": None,
                                 "tool_args": None,
-                                "tool_response": None
+                                "tool_response": None,
                             }
                             logs.append(log_entry)
                     except Exception:
                         continue
         except Exception as e:
             logger.error(f"Error reading log file: {e}")
-    
+
     return {"logs": logs, "total": len(logs)}
 
 
@@ -233,108 +254,125 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
 async def get_evaluation_results():
     """
     Get ADK evaluation results from recent test runs.
-    
+
     Returns:
         JSON with evaluation runs, test cases, metrics, and status
     """
     import json
     from pathlib import Path
     import os
-    
+
     results = []
-    
+
     # Read from ADK evaluation history
     eval_history_dir = Path("agent_eval/.adk/eval_history")
-    
+
     if eval_history_dir.exists():
         # Get all eval result files, sorted by modification time (newest first)
         eval_files = sorted(
             eval_history_dir.glob("*.evalset_result.json"),
             key=lambda p: p.stat().st_mtime,
-            reverse=True
+            reverse=True,
         )
-        
+
         for eval_file in eval_files:
             try:
-                with open(eval_file, 'r') as f:
+                with open(eval_file, "r") as f:
                     content = f.read()
                     # The file contains a JSON string, so we need to parse it twice
                     if content.startswith('"'):
-                        content = json.loads(content)  # First parse removes outer quotes
+                        content = json.loads(
+                            content
+                        )  # First parse removes outer quotes
                     data = json.loads(content) if isinstance(content, str) else content
-                    
+
                     # Parse eval cases
                     eval_cases = []
                     passed = 0
                     failed = 0
                     not_evaluated = 0
-                    
+
                     for case in data.get("eval_case_results", []):
                         # Map final_eval_status: 1=PASSED, 2=FAILED, 3=NOT_EVALUATED
                         status_map = {1: "PASSED", 2: "FAILED", 3: "NOT_EVALUATED"}
-                        status = status_map.get(case.get("final_eval_status", 3), "NOT_EVALUATED")
-                        
+                        status = status_map.get(
+                            case.get("final_eval_status", 3), "NOT_EVALUATED"
+                        )
+
                         if status == "PASSED":
                             passed += 1
                         elif status == "FAILED":
                             failed += 1
                         else:
                             not_evaluated += 1
-                        
+
                         # Extract conversation
                         conversation = []
                         invocations = case.get("eval_metric_result_per_invocation", [])
                         if invocations:
-                            inv = invocations[0].get("actual_invocation", {})
-                            user_content = ""
-                            final_response = ""
-                            
-                            # Get user content
-                            user_parts = inv.get("user_content", {}).get("parts", [])
-                            if user_parts:
-                                user_content = user_parts[0].get("text", "")
-                            
-                            # Get final response
-                            response_parts = inv.get("final_response", {}).get("parts", [])
-                            if response_parts:
-                                final_response = response_parts[0].get("text", "")
-                            
-                            conversation.append({
-                                "user_content": user_content,
-                                "final_response": final_response
-                            })
-                        
+                            inv = invocations[0].get("actual_invocation", {}) if invocations[0] else {}
+                            if inv:
+                                user_content = ""
+                                final_response = ""
+
+                                # Get user content - handle None values
+                                user_content_obj = inv.get("user_content")
+                                if user_content_obj:
+                                    user_parts = user_content_obj.get("parts", [])
+                                    if user_parts and len(user_parts) > 0:
+                                        user_content = user_parts[0].get("text", "")
+
+                                # Get final response - handle None values
+                                final_response_obj = inv.get("final_response")
+                                if final_response_obj:
+                                    response_parts = final_response_obj.get("parts", [])
+                                    if response_parts and len(response_parts) > 0:
+                                        final_response = response_parts[0].get("text", "")
+
+                                conversation.append(
+                                    {
+                                        "user_content": user_content,
+                                        "final_response": final_response,
+                                    }
+                                )
+
                         # Extract metrics
                         metrics = {}
-                        for metric_result in case.get("overall_eval_metric_results", []):
+                        for metric_result in case.get(
+                            "overall_eval_metric_results", []
+                        ):
                             metric_name = metric_result.get("metric_name")
                             score = metric_result.get("score")
                             if metric_name and score is not None:
                                 metrics[metric_name] = score
-                        
-                        eval_cases.append({
-                            "eval_id": case.get("eval_id", "unknown"),
-                            "status": status,
-                            "conversation": conversation,
-                            "metrics": metrics
-                        })
-                    
+
+                        eval_cases.append(
+                            {
+                                "eval_id": case.get("eval_id", "unknown"),
+                                "status": status,
+                                "conversation": conversation,
+                                "metrics": metrics,
+                            }
+                        )
+
                     # Create result entry
                     result = {
                         "eval_set_id": data.get("eval_set_id", "unknown"),
-                        "timestamp": datetime.datetime.fromtimestamp(eval_file.stat().st_mtime).isoformat(),
+                        "timestamp": datetime.datetime.fromtimestamp(
+                            eval_file.stat().st_mtime
+                        ).isoformat(),
                         "total_cases": len(eval_cases),
                         "passed": passed,
                         "failed": failed,
                         "not_evaluated": not_evaluated,
-                        "eval_cases": eval_cases
+                        "eval_cases": eval_cases,
                     }
                     results.append(result)
-                    
+
             except Exception as e:
                 logger.error(f"Error parsing eval file {eval_file}: {e}")
                 continue
-    
+
     return {"results": results, "total": len(results)}
 
 

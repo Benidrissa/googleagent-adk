@@ -33,6 +33,7 @@ services:
       - traefik
     volumes:
       - ./data:/app/data
+      - ./agent_eval:/app/agent_eval
     restart: unless-stopped
     networks:
       - pregnancy-net
