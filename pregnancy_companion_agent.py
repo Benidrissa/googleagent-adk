@@ -1938,17 +1938,22 @@ memory_service = DatabaseMemoryService(
 )
 
 # Import App for proper tool handling with gemini-2.5-flash-lite
-from google.adk.apps.app import App, ResumabilityConfig
+from google.adk.apps.app import App, ResumabilityConfig, EventsCompactionConfig
 
-# Wrap the root agent in an App with resumability support
+# Wrap the root agent in an App with resumability support and events compaction
 # This is required for proper function calling support with gemini-2.5-flash-lite
+# EventsCompactionConfig prevents context overflow in long conversations
 pregnancy_app = App(
     name=APP_NAME,
     root_agent=root_agent,
     resumability_config=ResumabilityConfig(is_resumable=True),
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # Trigger compaction every 3 invocations
+        overlap_size=1,  # Keep 1 previous turn for context
+    ),
 )
 
-logger.info("✅ Pregnancy Companion App created with resumability")
+logger.info("✅ Pregnancy Companion App created with resumability and events compaction")
 
 # Create the Runner with the App - this orchestrates agent execution
 runner = Runner(
@@ -2063,11 +2068,8 @@ async def run_agent_interaction(
                     span.set_attribute("tool_calls", tool_calls)
                     span.add_event("agent_execution_completed")
 
-        # Add session to memory for future recall
-        session = await session_service.get_session(
-            app_name=APP_NAME, user_id=user_id, session_id=session_id
-        )
-        await memory_service.add_session_to_memory(session)
+        # Memory is automatically saved via auto_save_to_memory callback
+        # No need to manually save here - it would cause race conditions
 
         if span:
             span.end()
