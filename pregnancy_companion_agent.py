@@ -86,12 +86,7 @@ else:
     os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
     logger.info("✅ Google API configured for direct Gemini API access")
 
-# Google Maps API key (can be same as GOOGLE_API_KEY or separate)
-GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", GOOGLE_API_KEY)
-if GOOGLE_MAPS_API_KEY == "YOUR_API_KEY_HERE":
-    logger.warning(
-        "⚠️  GOOGLE_MAPS_API_KEY not set. Maps functionality will be limited."
-    )
+# Google Maps API removed - using Google Search tool for facility search instead
 
 
 # Helper function to check if we should use simulation mode
@@ -698,8 +693,8 @@ def calculate_anc_schedule(lmp_date: str) -> Dict[str, Any]:
 
 def infer_country_from_location(location: str) -> Dict[str, Any]:
     """
-    Infers the country from a location string using geocoding.
-    Falls back to simulation mode if API key is not set.
+    Infers the country from a location string using simple pattern matching.
+    Note: For more accurate results, the agent should use google_search tool.
 
     Args:
         location: Location string (city, region, address, etc.)
@@ -714,90 +709,59 @@ def infer_country_from_location(location: str) -> Dict[str, Any]:
     if not location or not location.strip():
         return {"status": "error", "error_message": "Location cannot be empty"}
 
-    # Simulation mode when API key is not set
-    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
-        location_lower = location.lower()
-        simulated_mappings = {
-            "lagos": ("Nigeria", "Lagos, Nigeria"),
-            "bamako": ("Mali", "Bamako, Mali"),
-            "accra": ("Ghana", "Accra, Ghana"),
-            "abuja": ("Nigeria", "Abuja, Nigeria"),
-            "kumasi": ("Ghana", "Kumasi, Ghana"),
-            "sikasso": ("Mali", "Sikasso, Mali"),
-            "port harcourt": ("Nigeria", "Port Harcourt, Nigeria"),
-            "kano": ("Nigeria", "Kano, Nigeria"),
-        }
+    location_lower = location.lower()
+    
+    # Simple pattern matching for West African cities
+    city_country_map = {
+        # Nigeria
+        "lagos": ("Nigeria", "Lagos, Nigeria"),
+        "abuja": ("Nigeria", "Abuja, Nigeria"),
+        "port harcourt": ("Nigeria", "Port Harcourt, Nigeria"),
+        "kano": ("Nigeria", "Kano, Nigeria"),
+        "ibadan": ("Nigeria", "Ibadan, Nigeria"),
+        # Mali
+        "bamako": ("Mali", "Bamako, Mali"),
+        "sikasso": ("Mali", "Sikasso, Mali"),
+        "mopti": ("Mali", "Mopti, Mali"),
+        # Ghana
+        "accra": ("Ghana", "Accra, Ghana"),
+        "kumasi": ("Ghana", "Kumasi, Ghana"),
+        "tamale": ("Ghana", "Tamale, Ghana"),
+        # Burkina Faso
+        "ouagadougou": ("Burkina Faso", "Ouagadougou, Burkina Faso"),
+        "bobo-dioulasso": ("Burkina Faso", "Bobo-Dioulasso, Burkina Faso"),
+        # Senegal
+        "dakar": ("Senegal", "Dakar, Senegal"),
+        "thies": ("Senegal", "Thiès, Senegal"),
+        # Ivory Coast
+        "abidjan": ("Ivory Coast", "Abidjan, Ivory Coast"),
+        "yamoussoukro": ("Ivory Coast", "Yamoussoukro, Ivory Coast"),
+    }
 
-        for city, (country, formatted) in simulated_mappings.items():
-            if city in location_lower:
-                logger.info(
-                    f"[SIMULATION] Inferred country '{country}' from location '{location}'"
-                )
-                return {
-                    "status": "success",
-                    "country": country,
-                    "formatted_location": formatted,
-                    "simulation": True,
-                }
-
-        # Default for unknown locations
-        logger.warning(f"[SIMULATION] Unknown location: {location}")
-        return {
-            "status": "error",
-            "error_message": f"Could not determine country from location: {location}",
-            "simulation": True,
-        }
-
-    try:
-        # Use Google Maps Geocoding API
-        url = "https://maps.googleapis.com/maps/api/geocode/json"
-        params = {"address": location, "key": GOOGLE_MAPS_API_KEY}
-
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-
-        if data["status"] == "OK" and data["results"]:
-            result = data["results"][0]
-
-            # Extract country from address components
-            country = None
-            for component in result.get("address_components", []):
-                if "country" in component.get("types", []):
-                    country = component.get("long_name")
-                    break
-
+    for city, (country, formatted) in city_country_map.items():
+        if city in location_lower:
             logger.info(f"Inferred country '{country}' from location '{location}'")
-
             return {
                 "status": "success",
                 "country": country,
-                "formatted_location": result.get("formatted_address", location),
-            }
-        else:
-            logger.warning(f"Could not geocode location: {location}")
-            return {
-                "status": "error",
-                "error_message": f"Could not determine country from location: {location}",
+                "formatted_location": formatted,
             }
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Geocoding API error: {e}")
-        return {
-            "status": "error",
-            "error_message": f"Error contacting geocoding service: {str(e)}",
-        }
-    except Exception as e:
-        logger.error(f"Unexpected error in geocoding: {e}")
-        return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
+    # If no match, suggest agent use google_search for more info
+    logger.warning(f"Could not infer country from location: {location}")
+    return {
+        "status": "error",
+        "error_message": f"Could not determine country from location: {location}. Agent should use google_search tool for more information.",
+    }
 
 
-def find_nearby_health_facilities(
+def find_nearby_health_facilities_DEPRECATED(DEPRECATED(
     location: str, radius_meters: int = 5000
 ) -> Dict[str, Any]:
     """
-    Finds nearby health facilities (hospitals, clinics, maternity centers) using Google Places API.
-    Falls back to simulation mode if API key is not set.
+    DEPRECATED: This function used Google Maps Places API.
+    Agent should now use google_search tool instead to find nearby health facilities.
+    Example: google_search("hospitals near [location]") or google_search("maternity clinics in [city]")
 
     Args:
         location: Location string (city, address, coordinates)
@@ -810,8 +774,14 @@ def find_nearby_health_facilities(
             - count: Number of facilities found
             - error_message: Error description if status is "error"
     """
-    # Simulation mode when API key is not set
-    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
+    # DEPRECATED - Return error message
+    return {
+        \"status\": \"deprecated\",
+        \"error_message\": \"This function is deprecated. Use google_search tool instead for travel information.\",
+    }
+    
+    # OLD CODE BELOW - KEPT FOR REFERENCE ONLY
+    if False:  # Never execute
         location_lower = location.lower()
 
         # Simulated facilities for known cities
@@ -978,27 +948,26 @@ def find_nearby_health_facilities(
         return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
 
 
-def assess_road_accessibility(location: str, destination: str = None) -> Dict[str, Any]:
+def assess_road_accessibility_DEPRECATED(location: str, destination: str = None) -> Dict[str, Any]:
     """
-    Assesses road accessibility and travel information between locations.
-    Useful for planning trips to health facilities near due date.
-    Falls back to simulation mode if API key is not set.
-
-    Args:
-        location: Starting location (patient's location)
-        destination: Destination (health facility). If None, finds nearest hospital
-
-    Returns:
-        dict: Dictionary containing:
-            - status: "success" or "error"
-            - distance: Distance in kilometers
-            - duration: Travel time
-            - route_available: Whether a route exists
-            - travel_mode: Mode of transportation
-            - error_message: Error description if status is "error"
+    DEPRECATED: This function used Google Maps Directions API.
+    Agent should now use google_search tool instead.
+    Example: google_search("distance from [location] to [destination]")
+    
+    For travel planning, agent can search for:
+    - "how to get to [hospital] from [location]"
+    - "transport options [city]"
+    - "ambulance services [location]"
     """
-    # Simulation mode when API key is not set
-    if _is_api_key_placeholder(GOOGLE_MAPS_API_KEY):
+    return {
+        "status": "deprecated",
+        "error_message": "This function is deprecated. Use google_search tool instead for travel information.",
+    }
+
+
+def assess_road_accessibility_DEPRECATED_OLD(location: str, destination: str = None) -> Dict[str, Any]:
+    # OLD IMPLEMENTATION - KEPT FOR REFERENCE
+    if False:  # Never execute
         location_lower = location.lower()
 
         simulated_routes = {
@@ -1610,14 +1579,13 @@ agent_tools = [
     FunctionTool(func=upsert_pregnancy_record),  # Create/update patient records
     FunctionTool(func=calculate_edd),
     FunctionTool(func=calculate_anc_schedule),
-    FunctionTool(func=infer_country_from_location),
-    FunctionTool(func=assess_road_accessibility),
+    FunctionTool(func=infer_country_from_location),  # Simple city-to-country mapping
     FunctionTool(
         func=get_local_health_facilities
     ),  # MCP-style offline facility lookup (fallback)
     GoogleSearchTool(
         bypass_multi_tools_limit=True
-    ),  # Enable google_search with custom FunctionTools
+    ),  # Google Search for facilities, emergency contacts, travel info
 ]
 
 # Add MCP toolset if available
@@ -1689,17 +1657,24 @@ OPERATIONAL PROTOCOL:
    - Tailor advice to local context and traditional diets
    - Examples: iron-rich foods (beans, leafy greens), protein sources, hydration
 
-4. **Health Facility Search**:
-   - Use OpenAPI facilities tool to find nearby hospitals, clinics, and maternity centers
-   - Provide facility details: name, address, distance, rating, services
-   - Filter by type (hospital, maternity, emergency) based on patient needs
-   - Include contact information and emergency availability
+4. **Health Facility Search - Use Google Search**:
+   - When patient needs health facilities, use `google_search` tool with specific queries:
+     * google_search("hospitals in [city] [country]")
+     * google_search("maternity clinics near [location]")
+     * google_search("24/7 emergency hospital [city]")
+     * google_search("best maternity hospital [city] contact number")
+   - Extract facility names, addresses, phone numbers, and services from search results
+   - Present information clearly with contact details
+   - If get_local_health_facilities returns offline data, use that as fallback
 
-5. **Road Accessibility Assessment**:
-   - As due date approaches (weeks_remaining < 4), proactively assess road accessibility
-   - Use assess_road_accessibility tool with patient's location
-   - Provide travel time and distance to nearest hospital
-   - Advise on planning transportation in advance
+5. **Travel and Accessibility Information - Use Google Search**:
+   - When patient asks about travel or distance to facilities, use `google_search`:
+     * google_search("how to get to [hospital] from [location]")
+     * google_search("distance from [location] to [hospital]")
+     * google_search("transport options [city]")
+     * google_search("ambulance service [location] phone number")
+   - Provide practical travel advice based on search results
+   - As due date approaches (weeks_remaining < 4), proactively suggest transportation planning
    - Consider local conditions (rainy season, road quality)
 
 6. **Risk Assessment - CRITICAL PROTOCOL**:
