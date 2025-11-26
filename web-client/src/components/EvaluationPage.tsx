@@ -37,47 +37,10 @@ export default function EvaluationPage() {
       const response = await axios.get('/api/evaluation/results')
       setEvalResults(response.data.results || [])
     } catch (err: any) {
-      // If API endpoint doesn't exist, show sample data
-      setError('Evaluation endpoint not yet implemented. Showing sample data.')
-      setEvalResults([
-        {
-          eval_set_id: 'pregnancy_companion_integration_suite',
-          timestamp: new Date().toISOString(),
-          total_cases: 2,
-          passed: 0,
-          failed: 2,
-          eval_cases: [
-            {
-              eval_id: 'new_patient_registration',
-              status: 'FAILED',
-              conversation: [
-                {
-                  user_content: 'Hello! My name is Amina, phone +221 77 888 9999.',
-                  final_response: 'Hello Amina! Your estimated due date is March 22, 2026.'
-                }
-              ],
-              metrics: {
-                tool_trajectory_avg_score: 0.0,
-                response_match_score: 0.34
-              }
-            },
-            {
-              eval_id: 'nutrition_guidance_request',
-              status: 'FAILED',
-              conversation: [
-                {
-                  user_content: 'What foods are rich in iron?',
-                  final_response: 'Iron-rich foods include leafy greens, beans, and lean meats.'
-                }
-              ],
-              metrics: {
-                tool_trajectory_avg_score: 0.0,
-                response_match_score: 0.25
-              }
-            }
-          ]
-        }
-      ])
+      // Show actual error message
+      setError(err.response?.data?.detail || err.message || 'Failed to fetch evaluation results')
+      setEvalResults([])
+      console.error('Error fetching evaluation results:', err)
     } finally {
       setLoading(false)
     }
