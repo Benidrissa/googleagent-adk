@@ -209,23 +209,24 @@ logger.info("✅ Pregnancy Companion Agent initialized")
 
 class DatabaseMemoryService(InMemoryMemoryService):
     """
-    Persistent memory service using SQLite database.
+    Persistent memory service using SQLite database with per-patient isolation.
     Extends InMemoryMemoryService and adds database persistence.
 
     Stores sessions in database for persistence across restarts.
+    PRIVACY: Each patient (user_id/phone) has isolated conversation history.
     """
 
     def __init__(self, db_path: str = "pregnancy_agent_memory.db"):
-        """Initialize database-backed memory service."""
+        """Initialize database-backed memory service with patient isolation."""
         super().__init__()  # Initialize parent InMemoryMemoryService
         self.db_path = Path(db_path)
         self._session_cache = (
             {}
         )  # Cache sessions: {(app_name, user_id, session_id): Session}
         self._init_database()
-        self._load_sessions_from_database()  # Load existing sessions on startup
+        # Do NOT load all sessions - load only when requested by specific user
         logger.info(
-            f"✅ Database Memory Service initialized: {self.db_path.absolute()}"
+            f"✅ Database Memory Service initialized with PATIENT ISOLATION: {self.db_path.absolute()}"
         )
 
     def _init_database(self):
@@ -258,21 +259,22 @@ class DatabaseMemoryService(InMemoryMemoryService):
         conn.commit()
         conn.close()
 
-    def _load_sessions_from_database(self):
-        """Load existing sessions from database on startup."""
+    def _load_user_sessions_from_database(self, app_name: str, user_id: str):
+        """Load sessions for a specific user only (patient isolation)."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         count = 0
         try:
             cursor.execute(
-                "SELECT app_name, user_id, session_id, session_data FROM sessions"
+                "SELECT session_id, session_data FROM sessions WHERE app_name = ? AND user_id = ?",
+                (app_name, user_id),
             )
             for row in cursor.fetchall():
-                app_name, user_id, session_id, session_data = row
+                session_id, session_data = row
                 try:
                     session = pickle.loads(session_data)
-                    # Cache locally - will be added to parent's memory when first accessed
+                    # Cache locally
                     key = (app_name, user_id, session_id)
                     self._session_cache[key] = session
                     count += 1
@@ -280,21 +282,20 @@ class DatabaseMemoryService(InMemoryMemoryService):
                     logger.error(f"Error loading session from database: {e}")
 
             if count > 0:
-                logger.info(
-                    f"📚 Loaded {count} sessions from database (will sync to memory on first use)"
-                )
+                logger.info(f"📚 Loaded {count} sessions for user {user_id} (ISOLATED)")
         except Exception as e:
-            logger.error(f"Error reading from database: {e}")
+            logger.error(f"Error reading user sessions from database: {e}")
         finally:
             conn.close()
 
-    async def _restore_cached_sessions(self):
-        """Restore cached sessions to parent's in-memory storage."""
+    async def _restore_user_cached_sessions(self, app_name: str, user_id: str):
+        """Restore cached sessions for a specific user only."""
         for key, session in self._session_cache.items():
-            try:
-                await super().add_session_to_memory(session)
-            except Exception as e:
-                logger.error(f"Error restoring session {key}: {e}")
+            if key[0] == app_name and key[1] == user_id:
+                try:
+                    await super().add_session_to_memory(session)
+                except Exception as e:
+                    logger.error(f"Error restoring session {key}: {e}")
 
     async def add_session_to_memory(self, session):
         """Add session to memory and persist to database."""
@@ -337,7 +338,7 @@ class DatabaseMemoryService(InMemoryMemoryService):
             conn.close()
 
     def clear_user_memory(self, app_name: str, user_id: str):
-        """Clear memory for a user from both in-memory and database."""
+        """Clear memory for a specific user only (maintains other patients' privacy)."""
         # Clear from cache
         keys_to_delete = [
             k
@@ -355,29 +356,37 @@ class DatabaseMemoryService(InMemoryMemoryService):
                 "DELETE FROM sessions WHERE app_name = ? AND user_id = ?",
                 (app_name, user_id),
             )
+            deleted_count = cursor.rowcount
             conn.commit()
-            logger.info(f"🗑️  Cleared sessions for user {user_id}")
+            logger.info(
+                f"🗑️  [ISOLATED] Cleared {deleted_count} sessions for user {user_id} only"
+            )
         finally:
             conn.close()
 
     async def search_memory(self, app_name: str, user_id: str, query: str):
         """
-        Search stored sessions for relevant memories.
+        Search stored sessions for relevant memories - ONLY THIS USER'S SESSIONS.
+        PRIVACY: Never returns memories from other patients.
 
-        Implements keyword-based search across all user sessions stored in database.
+        Implements keyword-based search across THIS user's sessions only.
         Extracts text from session events and matches against query keywords.
 
         Args:
             app_name: Application name
-            user_id: User identifier
+            user_id: User identifier (phone number - unique patient ID)
             query: Search query string
 
         Returns:
-            SearchMemoryResponse with matching memories
+            SearchMemoryResponse with matching memories from THIS patient ONLY
         """
         from google.adk.memory.base_memory_service import SearchMemoryResponse
         from google.adk.memory.memory_entry import MemoryEntry
         from google.genai.types import Content, Part
+
+        # Ensure user sessions are loaded
+        if not any(key[1] == user_id for key in self._session_cache.keys()):
+            self._load_user_sessions_from_database(app_name, user_id)
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -387,14 +396,16 @@ class DatabaseMemoryService(InMemoryMemoryService):
         query_keywords = set(query_lower.split())
 
         try:
-            # Retrieve all sessions for this user
+            # CRITICAL: Only retrieve sessions for THIS specific user
             cursor.execute(
                 "SELECT session_id, session_data FROM sessions WHERE app_name = ? AND user_id = ?",
                 (app_name, user_id),
             )
 
+            sessions_checked = 0
             for row in cursor.fetchall():
                 session_id, session_data = row
+                sessions_checked += 1
                 try:
                     session = pickle.loads(session_data)
 
@@ -428,7 +439,7 @@ class DatabaseMemoryService(InMemoryMemoryService):
                     logger.error(f"Error processing session {session_id}: {e}")
 
             logger.info(
-                f"🔍 Found {len(matching_memories)} memories matching query: '{query}'"
+                f"🔍 [ISOLATED] Found {len(matching_memories)} memories for user {user_id} from {sessions_checked} sessions (query: '{query}')"
             )
 
         except Exception as e:
@@ -1954,7 +1965,9 @@ pregnancy_app = App(
     ),
 )
 
-logger.info("✅ Pregnancy Companion App created with resumability and events compaction")
+logger.info(
+    "✅ Pregnancy Companion App created with resumability and events compaction"
+)
 
 # Create the Runner with the App - this orchestrates agent execution
 runner = Runner(
@@ -1975,12 +1988,12 @@ async def run_agent_interaction(
 ):
     """
     Run a single agent interaction with proper ADK patterns.
-    Now includes OpenTelemetry tracing and pause/resume support.
+    Now includes OpenTelemetry tracing, pause/resume support, and PATIENT ISOLATION.
 
     Args:
         user_input: The user's message
-        user_id: User identifier for session management
-        session_id: Optional session ID (creates new session if None)
+        user_id: User identifier (phone number - unique patient ID)
+        session_id: Optional session ID (creates new phone-scoped session if None)
 
     Returns:
         str: The agent's final response
@@ -1995,10 +2008,16 @@ async def run_agent_interaction(
         span = None
 
     try:
-        # Create session if it doesn't exist or if session_id is provided but doesn't exist
+        # PATIENT ISOLATION: Ensure user sessions are loaded for this patient only
+        # Note: Memory service loads sessions on demand, session service manages conversation history
+        if hasattr(memory_service, "_load_user_sessions_from_database"):
+            memory_service._load_user_sessions_from_database(APP_NAME, user_id)
+
+        # Create phone-scoped session if it doesn't exist
         if session_id is None:
+            # Use phone number in session ID for easy identification and isolation
             session_id = (
-                f"session_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                f"patient_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
             )
 
         # Check if session exists

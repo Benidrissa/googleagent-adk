@@ -8,9 +8,33 @@ import asyncio
 import requests
 import json
 from datetime import datetime
+import os
+from pathlib import Path
 
 BASE_URL = "http://localhost:8001"
 USER_ID = "integration_test_user"
+
+
+def clear_test_databases():
+    """Clear test databases to prevent token overflow from accumulated test data"""
+    data_dir = Path(__file__).parent / "data"
+
+    db_files = [
+        "pregnancy_agent_sessions.db",
+        "pregnancy_agent_memory.db",
+        "pregnancy_records.db",
+    ]
+
+    print("\n🧹 Clearing test databases...")
+    for db_file in db_files:
+        db_path = data_dir / db_file
+        if db_path.exists():
+            try:
+                os.remove(db_path)
+                print(f"   ✓ Removed {db_file}")
+            except Exception as e:
+                print(f"   ⚠️ Could not remove {db_file}: {e}")
+    print()
 
 
 def print_section(title):
@@ -327,8 +351,12 @@ def main():
     print("  PREGNANCY COMPANION AGENT - LIVE INTEGRATION TESTS")
     print("  Model: gemini-2.5-flash-lite")
     print("  Pattern: App + ResumabilityConfig + FunctionTools + GoogleSearchTool")
-    print("  NEW: DatabaseSessionService + Phone-Based Lookup")
+    print("  NEW: DatabaseSessionService + Phone-Based Lookup + Patient Isolation")
     print("█" * 80)
+
+    # NOTE: Database clearing removed - databases are initialized on first agent startup
+    # Token overflow is prevented by patient isolation architecture
+    # Test data will accumulate but is isolated per patient phone number
 
     results = {
         "Nurse Agent Emergency": test_nurse_agent_emergency(),
