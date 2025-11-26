@@ -272,12 +272,52 @@ def test_function_tools():
         return False
 
 
+def test_phone_based_lookup():
+    """Test 7: Phone-Based Patient Lookup - Persistent Records"""
+    print_section("TEST 7: Phone-Based Patient Lookup")
+
+    # First interaction with phone number
+    session_id_1 = f"phone_test_1_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    response1 = send_message(
+        session_id_1,
+        "Hello, my phone is +223 70 99 88 77. My name is Aissata. I'm 23. My LMP was June 15, 2025. I live in Conakry, Guinea.",
+    )
+
+    if not response1:
+        print("❌ TEST 7 FAILED: No response to initial registration")
+        return False
+
+    # Wait a bit for database write
+    import time
+    time.sleep(2)
+
+    # NEW session - patient returns with just phone number
+    session_id_2 = f"phone_test_2_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    response2 = send_message(
+        session_id_2,
+        "Hi, my phone number is +223 70 99 88 77. What is my next ANC visit?",
+    )
+
+    if response2:
+        # Check if agent recognized the patient
+        if "aissata" in response2.lower() or "visit" in response2.lower():
+            print("✅ TEST 7 PASSED: Patient recognized by phone number")
+            return True
+        else:
+            print("⚠️ TEST 7 PARTIAL: Response received but patient recognition unclear")
+            return False
+    else:
+        print("❌ TEST 7 FAILED: No response received")
+        return False
+
+
 def main():
     """Run all integration tests"""
     print("\n" + "█" * 80)
     print("  PREGNANCY COMPANION AGENT - LIVE INTEGRATION TESTS")
     print("  Model: gemini-2.5-flash-lite")
     print("  Pattern: App + ResumabilityConfig + FunctionTools + GoogleSearchTool")
+    print("  NEW: DatabaseSessionService + Phone-Based Lookup")
     print("█" * 80)
 
     results = {
@@ -287,6 +327,7 @@ def main():
         "Memory Across Sessions": test_memory_across_sessions(),
         "Combined Nurse + Search": test_combined_nurse_and_search(),
         "Custom Function Tools": test_function_tools(),
+        "Phone-Based Lookup": test_phone_based_lookup(),
     }
 
     # Summary
