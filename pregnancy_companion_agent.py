@@ -126,71 +126,6 @@ STATE_LAST_TOPIC = "last_discussed_topic"
 STATE_PENDING_ACTIONS = "pending_actions"
 
 # MCP Health Facility Cache (simulated local database)
-LOCAL_HEALTH_FACILITIES = {
-    "Bamako": [
-        {
-            "name": "Hospital Gabriel Touré",
-            "address": "Rue 40, Bamako",
-            "type": "general",
-            "rating": 4.2,
-            "emergency": True,
-        },
-        {
-            "name": "Point G Hospital",
-            "address": "Colline du Point G, Bamako",
-            "type": "general",
-            "rating": 4.0,
-            "emergency": True,
-        },
-        {
-            "name": "Centre de Santé Communautaire",
-            "address": "Avenue Moussa Tavele",
-            "type": "clinic",
-            "rating": 3.8,
-            "emergency": False,
-        },
-    ],
-    "Accra": [
-        {
-            "name": "Ridge Hospital",
-            "address": "Castle Road, Ridge, Accra",
-            "type": "general",
-            "rating": 4.3,
-            "emergency": True,
-        },
-        {
-            "name": "37 Military Hospital",
-            "address": "Liberation Road, Accra",
-            "type": "military",
-            "rating": 4.5,
-            "emergency": True,
-        },
-        {
-            "name": "Korle Bu Teaching Hospital",
-            "address": "Guggisberg Avenue, Accra",
-            "type": "teaching",
-            "rating": 4.1,
-            "emergency": True,
-        },
-    ],
-    "Lagos": [
-        {
-            "name": "Lagos University Teaching Hospital",
-            "address": "Idi-Araba, Lagos",
-            "type": "teaching",
-            "rating": 4.0,
-            "emergency": True,
-        },
-        {
-            "name": "Lagos Island Maternity Hospital",
-            "address": "Broad Street, Lagos Island",
-            "type": "maternity",
-            "rating": 3.9,
-            "emergency": True,
-        },
-    ],
-}
-
 # --- APPLICATION CONSTANTS ---
 APP_NAME = "pregnancy_companion"
 DEFAULT_USER_ID = "patient_user"
@@ -477,64 +412,30 @@ class DatabaseMemoryService(InMemoryMemoryService):
 # ============================================================================
 
 
-def get_local_health_facilities(
+def get_local_health_facilities_DEPRECATED(
     city: str, facility_type: str = "all"
 ) -> Dict[str, Any]:
     """
-    Get health facilities from local MCP-style database (offline-capable).
-    This simulates an MCP (Model Context Protocol) server providing local data.
-
-    Args:
-        city: City name to search in
-        facility_type: Type filter ("all", "emergency", "maternity", "clinic")
-
-    Returns:
-        dict: Dictionary containing:
-            - status: "success" or "error"
-            - facilities: List of local health facilities
-            - source: "local_mcp" to indicate offline capability
-            - count: Number of facilities found
+    DEPRECATED: This function returned hardcoded test data.
+    
+    Agent should now use google_search tool to find real, current facility information:
+    - google_search("hospitals in [city] [country]")
+    - google_search("maternity clinics [location]")
+    - google_search("[facility_type] near [location] with contact number")
+    
+    This provides:
+    - Real, up-to-date facility information
+    - Current phone numbers and addresses
+    - Operating hours and services
+    - Patient reviews and ratings
     """
-    try:
-        # Search local database (MCP-style)
-        city_key = None
-        for key in LOCAL_HEALTH_FACILITIES.keys():
-            if key.lower() in city.lower() or city.lower() in key.lower():
-                city_key = key
-                break
-
-        if not city_key:
-            return {
-                "status": "error",
-                "error_message": f"No local data available for {city}. Try nearby cities.",
-                "available_cities": list(LOCAL_HEALTH_FACILITIES.keys()),
-            }
-
-        facilities = LOCAL_HEALTH_FACILITIES[city_key]
-
-        # Filter by type if specified
-        if facility_type != "all":
-            if facility_type == "emergency":
-                facilities = [f for f in facilities if f.get("emergency", False)]
-            else:
-                facilities = [f for f in facilities if f.get("type") == facility_type]
-
-        logger.info(
-            f"Retrieved {len(facilities)} local facilities for {city} (MCP source)"
-        )
-
-        return {
-            "status": "success",
-            "facilities": facilities,
-            "source": "local_mcp",
-            "count": len(facilities),
-            "city": city_key,
-            "offline_capable": True,
-        }
-
-    except Exception as e:
-        logger.error(f"Error accessing local facility database: {e}")
-        return {"status": "error", "error_message": f"Database error: {str(e)}"}
+    return {
+        "status": "deprecated",
+        "error_message": (
+            f"This function is deprecated. Please use google_search tool instead to find "
+            f"real facilities in {city}. Example: google_search('hospitals in {city}')"
+        ),
+    }
 
 
 def calculate_edd(lmp_date: str) -> Dict[str, Any]:
@@ -784,99 +685,10 @@ def find_nearby_health_facilities_DEPRECATED(DEPRECATED(
     if False:  # Never execute
         location_lower = location.lower()
 
-        # Simulated facilities for known cities
-        simulated_facilities = {
-            "lagos": [
-                {
-                    "name": "Lagos University Teaching Hospital",
-                    "address": "Idi-Araba, Lagos",
-                    "rating": 4.2,
-                    "open_now": True,
-                    "types": ["hospital", "emergency"],
-                },
-                {
-                    "name": "Lagos Island Maternity Hospital",
-                    "address": "Broad Street, Lagos Island",
-                    "rating": 4.0,
-                    "open_now": True,
-                    "types": ["hospital", "maternity"],
-                },
-                {
-                    "name": "Mainland Hospital Yaba",
-                    "address": "Yaba, Lagos",
-                    "rating": 3.8,
-                    "open_now": True,
-                    "types": ["hospital", "clinic"],
-                },
-            ],
-            "bamako": [
-                {
-                    "name": "Hospital Gabriel Touré",
-                    "address": "Commune III, Bamako",
-                    "rating": 4.1,
-                    "open_now": True,
-                    "types": ["hospital", "emergency"],
-                },
-                {
-                    "name": "Point G Hospital",
-                    "address": "Point G, Bamako",
-                    "rating": 4.3,
-                    "open_now": True,
-                    "types": ["hospital"],
-                },
-                {
-                    "name": "Maternité Communautaire du Mali",
-                    "address": "Commune IV, Bamako",
-                    "rating": 3.9,
-                    "open_now": True,
-                    "types": ["hospital", "maternity"],
-                },
-            ],
-            "accra": [
-                {
-                    "name": "Ridge Hospital",
-                    "address": "Ridge, Accra",
-                    "rating": 4.2,
-                    "open_now": True,
-                    "types": ["hospital"],
-                },
-                {
-                    "name": "Korle Bu Teaching Hospital",
-                    "address": "Korle Bu, Accra",
-                    "rating": 4.4,
-                    "open_now": True,
-                    "types": ["hospital", "emergency"],
-                },
-                {
-                    "name": "Princess Marie Louise Hospital",
-                    "address": "Kinkole, Accra",
-                    "rating": 4.0,
-                    "open_now": True,
-                    "types": ["hospital", "maternity"],
-                },
-            ],
-        }
-
-        for city, facilities_list in simulated_facilities.items():
-            if city in location_lower:
-                logger.info(
-                    f"[SIMULATION] Found {len(facilities_list)} facilities near {location}"
-                )
-                return {
-                    "status": "success",
-                    "facilities": facilities_list,
-                    "count": len(facilities_list),
-                    "location": location,
-                    "radius_meters": radius_meters,
-                    "simulation": True,
-                }
-
-        # Default for unknown locations
-        logger.warning(f"[SIMULATION] No facilities data for location: {location}")
+        # No simulated data - return deprecated message
         return {
-            "status": "error",
-            "error_message": f"No facilities found near {location}. Try: Lagos, Bamako, or Accra",
-            "simulation": True,
+            "status": "deprecated",
+            "error_message": f"This function no longer provides facility data. Use google_search('hospitals near {location}') instead.",
         }
 
     try:
@@ -1580,12 +1392,9 @@ agent_tools = [
     FunctionTool(func=calculate_edd),
     FunctionTool(func=calculate_anc_schedule),
     FunctionTool(func=infer_country_from_location),  # Simple city-to-country mapping
-    FunctionTool(
-        func=get_local_health_facilities
-    ),  # MCP-style offline facility lookup (fallback)
     GoogleSearchTool(
         bypass_multi_tools_limit=True
-    ),  # Google Search for facilities, emergency contacts, travel info
+    ),  # Google Search for real facility data, emergency contacts, travel info
 ]
 
 # Add MCP toolset if available
@@ -1657,15 +1466,17 @@ OPERATIONAL PROTOCOL:
    - Tailor advice to local context and traditional diets
    - Examples: iron-rich foods (beans, leafy greens), protein sources, hydration
 
-4. **Health Facility Search - Use Google Search**:
-   - When patient needs health facilities, use `google_search` tool with specific queries:
-     * google_search("hospitals in [city] [country]")
-     * google_search("maternity clinics near [location]")
-     * google_search("24/7 emergency hospital [city]")
-     * google_search("best maternity hospital [city] contact number")
-   - Extract facility names, addresses, phone numbers, and services from search results
-   - Present information clearly with contact details
-   - If get_local_health_facilities returns offline data, use that as fallback
+4. **Health Facility Search - ALWAYS Use Google Search for Real Data**:
+   - When patient asks about health facilities, hospitals, or clinics:
+   - Use `google_search` tool with patient's actual location from their profile:
+     * google_search("maternity hospitals in [patient's city] [patient's country]")
+     * google_search("hospitals with maternity ward [location] phone number")
+     * google_search("24/7 emergency obstetrics [city] [country]")
+     * google_search("best rated maternity clinic [location] contact")
+   - Extract from search results: facility names, addresses, phone numbers, services, hours
+   - Present information clearly with complete contact details
+   - If OpenAPI facilities tool is available, you can also use it for additional data
+   - NEVER use hardcoded or test data - always search for current, real information
 
 5. **Travel and Accessibility Information - Use Google Search**:
    - When patient asks about travel or distance to facilities, use `google_search`:
