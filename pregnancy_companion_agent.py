@@ -656,7 +656,7 @@ def infer_country_from_location(location: str) -> Dict[str, Any]:
     }
 
 
-def find_nearby_health_facilities_DEPRECATED(DEPRECATED(
+def find_nearby_health_facilities_DEPRECATED(
     location: str, radius_meters: int = 5000
 ) -> Dict[str, Any]:
     """
