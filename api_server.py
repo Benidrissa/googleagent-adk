@@ -311,6 +311,120 @@ async def run_evaluation(background_tasks: BackgroundTasks):
         )
 
 
+class LiveEvaluationRequest(BaseModel):
+    """Request model for live evaluation endpoint"""
+    session_id: str = Field(..., description="Session ID of the conversation")
+    user_id: str = Field(..., description="User ID")
+    conversation: list = Field(..., description="List of conversation pairs")
+
+
+@app.post("/evaluation/run-live", tags=["Evaluation"])
+async def run_live_evaluation(request: LiveEvaluationRequest, background_tasks: BackgroundTasks):
+    """
+    Trigger evaluation on actual ongoing chat conversation.
+    Creates dynamic evalset from current conversation and evaluates it.
+
+    Returns:
+        Status message indicating evaluation has been triggered
+    """
+    import subprocess
+    from pathlib import Path
+    import json
+    import tempfile
+
+    try:
+        if not request.conversation or len(request.conversation) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No conversation data provided for evaluation"
+            )
+
+        # Create dynamic evalset from conversation
+        eval_cases = []
+        for idx, conv in enumerate(request.conversation):
+            eval_case = {
+                "eval_id": f"live_chat_{request.session_id}_{idx}",
+                "conversation": [
+                    {
+                        "invocation_id": f"{request.session_id}-{idx}",
+                        "user_content": {
+                            "parts": [{"text": conv["user_content"]}],
+                            "role": "user"
+                        },
+                        "final_response": {
+                            "parts": [{"text": conv["agent_response"]}],
+                            "role": "model"
+                        },
+                        "intermediate_data": {
+                            "tool_uses": [],
+                            "intermediate_responses": []
+                        }
+                    }
+                ],
+                "session_input": {
+                    "app_name": "pregnancy_companion",
+                    "user_id": request.user_id,
+                    "state": {}
+                }
+            }
+            eval_cases.append(eval_case)
+
+        dynamic_evalset = {
+            "eval_set_id": f"live_conversation_{request.session_id}",
+            "name": f"Live Chat Evaluation - {request.user_id}",
+            "description": f"Real-time evaluation of ongoing chat conversation (Session: {request.session_id})",
+            "eval_cases": eval_cases
+        }
+
+        # Write to temporary file
+        temp_eval_file = Path(f"agent_eval/.adk/live_eval_{request.session_id}.json")
+        temp_eval_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(temp_eval_file, "w") as f:
+            json.dump(dynamic_evalset, f, indent=2)
+
+        config_path = Path("tests/evaluation_config.json")
+
+        # Run evaluation in background
+        def run_eval_task():
+            try:
+                logger.info(f"Starting live conversation evaluation for session {request.session_id}...")
+                result = subprocess.run(
+                    [
+                        "adk", "eval", "agent_eval",
+                        str(temp_eval_file),
+                        "--config_file_path", str(config_path)
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                if result.returncode == 0:
+                    logger.info(f"Live evaluation completed: {result.stdout}")
+                else:
+                    logger.error(f"Live evaluation failed: {result.stderr}")
+            except Exception as e:
+                logger.error(f"Error running live evaluation: {e}")
+
+        background_tasks.add_task(run_eval_task)
+
+        return {
+            "status": "triggered",
+            "message": f"Live conversation evaluation started for {len(request.conversation)} message(s). Results will be available shortly.",
+            "timestamp": datetime.datetime.now().isoformat(),
+            "eval_set_id": dynamic_evalset["eval_set_id"]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering live evaluation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trigger live evaluation: {str(e)}"
+        )
+
+
 @app.get("/evaluation/results", tags=["Evaluation"])
 async def get_evaluation_results():
     """

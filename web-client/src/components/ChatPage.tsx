@@ -179,9 +179,26 @@ export default function ChatPage() {
     setEvalSuccess('')
 
     try {
-      const response = await axios.post(`${API_URL}/evaluation/run`, {
+      // Extract user-agent conversation pairs (exclude system messages)
+      const conversationPairs = []
+      for (let i = 0; i < messages.length; i++) {
+        if (messages[i].role === 'user' && i + 1 < messages.length && messages[i + 1].role === 'agent') {
+          conversationPairs.push({
+            user_content: messages[i].content,
+            agent_response: messages[i + 1].content
+          })
+        }
+      }
+
+      if (conversationPairs.length === 0) {
+        setError('No complete user-agent conversation pairs found to evaluate.')
+        return
+      }
+
+      const response = await axios.post(`${API_URL}/evaluation/run-live`, {
         session_id: sessionId,
-        user_id: userId
+        user_id: userId,
+        conversation: conversationPairs
       })
       
       setEvalSuccess(`✅ Evaluation completed! Check the Evaluation page for results.`)
