@@ -417,12 +417,12 @@ def get_local_health_facilities_DEPRECATED(
 ) -> Dict[str, Any]:
     """
     DEPRECATED: This function returned hardcoded test data.
-    
+
     Agent should now use google_search tool to find real, current facility information:
     - google_search("hospitals in [city] [country]")
     - google_search("maternity clinics [location]")
     - google_search("[facility_type] near [location] with contact number")
-    
+
     This provides:
     - Real, up-to-date facility information
     - Current phone numbers and addresses
@@ -611,7 +611,7 @@ def infer_country_from_location(location: str) -> Dict[str, Any]:
         return {"status": "error", "error_message": "Location cannot be empty"}
 
     location_lower = location.lower()
-    
+
     # Simple pattern matching for West African cities
     city_country_map = {
         # Nigeria
@@ -680,7 +680,7 @@ def find_nearby_health_facilities_DEPRECATED(
         "status": "deprecated",
         "error_message": "This function is deprecated. Use google_search tool instead for travel information.",
     }
-    
+
     # OLD CODE BELOW - KEPT FOR REFERENCE ONLY
     if False:  # Never execute
         location_lower = location.lower()
@@ -760,12 +760,14 @@ def find_nearby_health_facilities_DEPRECATED(
         return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
 
 
-def assess_road_accessibility_DEPRECATED(location: str, destination: str = None) -> Dict[str, Any]:
+def assess_road_accessibility_DEPRECATED(
+    location: str, destination: str = None
+) -> Dict[str, Any]:
     """
     DEPRECATED: This function used Google Maps Directions API.
     Agent should now use google_search tool instead.
     Example: google_search("distance from [location] to [destination]")
-    
+
     For travel planning, agent can search for:
     - "how to get to [hospital] from [location]"
     - "transport options [city]"
@@ -777,7 +779,9 @@ def assess_road_accessibility_DEPRECATED(location: str, destination: str = None)
     }
 
 
-def assess_road_accessibility_DEPRECATED_OLD(location: str, destination: str = None) -> Dict[str, Any]:
+def assess_road_accessibility_DEPRECATED_OLD(
+    location: str, destination: str = None
+) -> Dict[str, Any]:
     # OLD IMPLEMENTATION - KEPT FOR REFERENCE
     if False:  # Never execute
         location_lower = location.lower()
@@ -953,7 +957,7 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
 
     This tool allows the agent to check if a patient is already known
     and retrieve their complete pregnancy profile including medical history.
-    
+
     IMPORTANT: If the patient has an LMP date recorded, this tool automatically
     calculates and includes their full ANC (Antenatal Care) visit schedule,
     next upcoming visit, and any overdue visits. You can use this information
@@ -1016,7 +1020,7 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
                 "record": record,
                 "message": f"Found existing pregnancy record for {record['name']}",
             }
-            
+
             if record.get("lmp_date"):
                 # Calculate ANC schedule and include in response
                 try:
@@ -1025,10 +1029,12 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
                         result["anc_schedule"] = anc_result.get("anc_schedule", [])
                         result["next_visit"] = anc_result.get("next_visit")
                         result["overdue_visits"] = anc_result.get("overdue_visits", [])
-                        result["message"] += f". Patient's LMP: {record['lmp_date']}. ANC schedule calculated automatically."
+                        result[
+                            "message"
+                        ] += f". Patient's LMP: {record['lmp_date']}. ANC schedule calculated automatically."
                 except Exception as e:
                     logger.warning(f"Could not calculate ANC schedule: {e}")
-            
+
             return result
         else:
             logger.info(f"📋 No pregnancy record found for phone: {phone}")
@@ -1360,9 +1366,9 @@ async def auto_save_to_memory(callback_context):
         invocation_context = callback_context._invocation_context
         session = invocation_context.session
         memory_service_instance = invocation_context.memory_service
-        
+
         # Only save if session exists and is not a dict
-        if session and hasattr(session, 'session_id'):
+        if session and hasattr(session, "session_id"):
             await memory_service_instance.add_session_to_memory(session)
             logger.debug("💾 Session automatically saved to memory")
         else:
