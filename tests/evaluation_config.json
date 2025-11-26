@@ -4,7 +4,15 @@
     "response_match_score": 0.75,
     "rubric_based_tool_use_quality_v1": {
       "threshold": 0.8,
-      "rubric": "Agent should:\n1. Always ask for phone number as unique identifier\n2. Use get_pregnancy_by_phone to check existing patients\n3. Use upsert_pregnancy_record to save/update patient data\n4. Call calculate_edd when LMP is provided\n5. Call calculate_anc_schedule when patient asks about appointments\n6. Call nurse_agent for high-risk symptoms (bleeding, severe pain, dizziness)\n7. Use google_search for nutrition guidance and emergency contacts\n8. Provide clear, compassionate responses in simple language"
+      "rubrics": [
+        "Agent should always ask for phone number as unique identifier and use get_pregnancy_by_phone to check existing patients",
+        "Agent should use upsert_pregnancy_record tool to save/update patient data after collecting information",
+        "Agent should call calculate_edd when LMP date is provided",
+        "Agent should call calculate_anc_schedule when patient asks about appointments or next visit",
+        "Agent should call nurse_agent for high-risk symptoms like bleeding, severe pain, or dizziness",
+        "Agent should use google_search for nutrition guidance, emergency contacts, and facility information",
+        "Agent should provide clear, compassionate responses in simple language without medical jargon"
+      ]
     }
   }
 }
