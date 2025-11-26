@@ -677,8 +677,8 @@ def find_nearby_health_facilities_DEPRECATED(
     """
     # DEPRECATED - Return error message
     return {
-        \"status\": \"deprecated\",
-        \"error_message\": \"This function is deprecated. Use google_search tool instead for travel information.\",
+        "status": "deprecated",
+        "error_message": "This function is deprecated. Use google_search tool instead for travel information.",
     }
     
     # OLD CODE BELOW - KEPT FOR REFERENCE ONLY
