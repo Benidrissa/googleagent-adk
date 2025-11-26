@@ -131,6 +131,10 @@ def test_session_persistence():
         "Hi, my name is Aisha, phone +233 20 999 8888. I am 19 years old. My LMP was April 10, 2025.",
     )
 
+    # Wait for session to be saved
+    import time
+    time.sleep(1)
+
     # Second message - reference previous context without repeating
     response2 = send_message(session_id, "When is my due date?")
 
