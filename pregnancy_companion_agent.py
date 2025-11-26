@@ -1943,6 +1943,7 @@ from google.adk.apps.app import App, ResumabilityConfig, EventsCompactionConfig
 # Wrap the root agent in an App with resumability support and events compaction
 # This is required for proper function calling support with gemini-2.5-flash-lite
 # EventsCompactionConfig prevents context overflow in long conversations
+# Configuration follows ADK documentation sample code
 pregnancy_app = App(
     name=APP_NAME,
     root_agent=root_agent,
