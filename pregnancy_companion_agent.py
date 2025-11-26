@@ -1172,6 +1172,11 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
 
     This tool allows the agent to check if a patient is already known
     and retrieve their complete pregnancy profile including medical history.
+    
+    IMPORTANT: If the patient has an LMP date recorded, this tool automatically
+    calculates and includes their full ANC (Antenatal Care) visit schedule,
+    next upcoming visit, and any overdue visits. You can use this information
+    to directly answer questions about "next ANC visit" or "next appointment".
 
     Args:
         phone: Phone number (unique patient identifier)
@@ -1180,6 +1185,9 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
         dict: Dictionary containing:
             - status: "success" or "not_found"
             - record: Patient pregnancy record if found
+            - anc_schedule: List of ANC visits (if LMP available)
+            - next_visit: Next upcoming visit info (if LMP available)
+            - overdue_visits: List of overdue visits (if LMP available)
             - message: Status message
     """
     if not phone or not phone.strip():
@@ -1221,11 +1229,26 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
 
             logger.info(f"📋 Retrieved pregnancy record for phone: {phone}")
 
-            return {
+            # Auto-calculate ANC schedule if LMP is available
+            result = {
                 "status": "success",
                 "record": record,
                 "message": f"Found existing pregnancy record for {record['name']}",
             }
+            
+            if record.get("lmp_date"):
+                # Calculate ANC schedule and include in response
+                try:
+                    anc_result = calculate_anc_schedule(record["lmp_date"])
+                    if anc_result.get("status") == "success":
+                        result["anc_schedule"] = anc_result.get("anc_schedule", [])
+                        result["next_visit"] = anc_result.get("next_visit")
+                        result["overdue_visits"] = anc_result.get("overdue_visits", [])
+                        result["message"] += f". Patient's LMP: {record['lmp_date']}. ANC schedule calculated automatically."
+                except Exception as e:
+                    logger.warning(f"Could not calculate ANC schedule: {e}")
+            
+            return result
         else:
             logger.info(f"📋 No pregnancy record found for phone: {phone}")
             return {
@@ -1623,7 +1646,11 @@ OPERATIONAL PROTOCOL:
 1. **Patient Identification & Profile**:
    - ALWAYS ask for phone number first - this is the unique patient identifier
    - Use get_pregnancy_by_phone tool to check if patient already exists in the system
-   - If patient found: Greet them by name and reference their existing data (LMP, location, etc.)
+   - If patient found: 
+     * Greet them by name and reference their existing data (LMP, location, etc.)
+     * CRITICAL: When patient asks about "next ANC visit", "next appointment", or "when should I come", immediately use calculate_anc_schedule tool with their LMP date
+     * Extract the lmp_date from the retrieved record and call calculate_anc_schedule(lmp_date=record['lmp_date'])
+     * Then tell the patient their next visit date and what will happen during that visit
    - If patient not found: Collect Name, Age, Phone, LMP, Country, Location
    - If location/country is missing, ask politely: "Where are you located so I can provide local information?"
    - If country is not provided but location is given, use infer_country_from_location tool
@@ -1632,11 +1659,13 @@ OPERATIONAL PROTOCOL:
    - Update records when new information is learned (e.g., risk level from nurse assessment)
    - Use simple language - avoid medical jargon, acronyms, and complex terms
 
-2. **Calculate EDD (Due Date)**:
+2. **Calculate EDD (Due Date) and ANC Schedule**:
    - When the patient provides their LMP date, use the `calculate_edd` tool
    - The tool expects date format: YYYY-MM-DD (e.g., "2025-05-01")
    - Share the results in a friendly, understandable way
    - Note the weeks_remaining for travel planning purposes
+   - When patient asks about ANC visits, appointments, or checkups, use `calculate_anc_schedule` with their LMP date
+   - Present the ANC schedule clearly: visit number, date, activities for each visit
 
 3. **Nutrition Information**:
    - When patients ask about nutrition, use the `google_search` tool to get current, evidence-based advice
