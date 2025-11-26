@@ -1577,12 +1577,22 @@ except Exception as e:
 async def auto_save_to_memory(callback_context):
     """Automatically save session to memory after each agent turn."""
     try:
-        await callback_context._invocation_context.memory_service.add_session_to_memory(
-            callback_context._invocation_context.session
-        )
-        logger.debug("💾 Session automatically saved to memory")
+        # Access session and memory service from callback context
+        invocation_context = callback_context._invocation_context
+        session = invocation_context.session
+        memory_service_instance = invocation_context.memory_service
+        
+        # Only save if session exists and is not a dict
+        if session and hasattr(session, 'session_id'):
+            await memory_service_instance.add_session_to_memory(session)
+            logger.debug("💾 Session automatically saved to memory")
+        else:
+            logger.debug("⏭️  Skipping auto-save (session not initialized yet)")
+    except AttributeError as e:
+        # Session might be a dict in some cases, skip silently
+        logger.debug(f"Auto-save skipped (session format issue): {e}")
     except Exception as e:
-        logger.error(f"Error auto-saving to memory: {e}")
+        logger.error(f"Error auto-saving to memory: {e}", exc_info=True)
 
 
 logger.info("✅ Memory auto-save callback created")

@@ -39,7 +39,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.agent.rule=PathPrefix(`/api`)"
-      - "traefik.http.routers.agent.entrypoints=api"
+      - "traefik.http.routers.agent.entrypoints=web"
       - "traefik.http.services.agent.loadbalancer.server.port=8000"
       - "traefik.http.middlewares.agent-strip.stripprefix.prefixes=/api"
       - "traefik.http.routers.agent.middlewares=agent-strip"

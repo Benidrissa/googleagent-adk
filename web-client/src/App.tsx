@@ -14,7 +14,7 @@ interface ChatResponse {
   timestamp: string
 }
 
-// Use /api proxy path - nginx will forward to backend
+// Use /api proxy path - nginx will forward to agent service
 const API_URL = '/api'
 
 function App() {
