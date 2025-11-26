@@ -45,6 +45,7 @@ from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.openapi_tool import OpenAPIToolset
+from google.adk.plugins.logging_plugin import LoggingPlugin
 from google.genai import types
 from google.genai.types import HarmCategory, HarmBlockThreshold
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -1788,6 +1789,7 @@ from google.adk.apps.app import App, ResumabilityConfig, EventsCompactionConfig
 # Wrap the root agent in an App with resumability support and events compaction
 # This is required for proper function calling support with gemini-2.5-flash-lite
 # EventsCompactionConfig prevents context overflow in long conversations
+# LoggingPlugin provides comprehensive observability across all agent interactions
 # Configuration follows ADK documentation sample code
 pregnancy_app = App(
     name=APP_NAME,
@@ -1797,7 +1799,12 @@ pregnancy_app = App(
         compaction_interval=3,  # Trigger compaction every 3 invocations
         overlap_size=1,  # Keep 1 previous turn for context
     ),
+    plugins=[
+        LoggingPlugin()  # Provides standard observability logging for all agent interactions
+    ],
 )
+
+logger.info("✅ LoggingPlugin enabled for comprehensive observability")
 
 logger.info(
     "✅ Pregnancy Companion App created with resumability and events compaction"
