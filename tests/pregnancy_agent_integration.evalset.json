@@ -19,7 +19,7 @@
           "final_response": {
             "parts": [
               {
-                "text": "Hello Amina! Your estimated due date is March 22, 2026. You are currently about 23 weeks pregnant, with approximately 17 weeks remaining until your due date. How can I help you today?"
+                "text": "Hello Amina! It's good to have you here. I've updated your information.\n\nYour estimated due date is March 22, 2026. You are currently about 23 weeks pregnant.\n\nIt looks like your first two antenatal care visits are overdue. The first was scheduled for August 24, 2025, and the second for November 2, 2025. Your next scheduled visit is number 3, which is on December 14, 2025. This visit is for when you are 26 weeks pregnant.\n\nWould you like to know more about what happens during these visits?"
               }
             ],
             "role": "model"
@@ -27,13 +27,24 @@
           "intermediate_data": {
             "tool_uses": [
               {
-                "name": "get_pregnancy_by_phone",
+                "name": "upsert_pregnancy_record",
                 "args": {
-                  "phone": "+221 77 888 9999"
+                  "phone": "+221 77 888 9999",
+                  "name": "Amina",
+                  "age": 26,
+                  "lmp_date": "2025-06-15",
+                  "location": "Dakar",
+                  "country": "Senegal"
                 }
               },
               {
                 "name": "calculate_edd",
+                "args": {
+                  "lmp_date": "2025-06-15"
+                }
+              },
+              {
+                "name": "calculate_anc_schedule",
                 "args": {
                   "lmp_date": "2025-06-15"
                 }
