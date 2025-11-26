@@ -1272,11 +1272,9 @@ Always respond with a clear JSON structure:
 Be professional, compassionate, and always prioritize patient safety.
 """,
     tools=[
-        FunctionTool(func=find_nearby_health_facilities),
-        FunctionTool(func=get_local_health_facilities),
         GoogleSearchTool(
             bypass_multi_tools_limit=True
-        ),  # Enable google_search with custom FunctionTools
+        ),  # Use google_search for real facility and emergency contact data
     ],
     generate_content_config=types.GenerateContentConfig(
         temperature=0.2,  # Lower temperature for more consistent medical assessments
