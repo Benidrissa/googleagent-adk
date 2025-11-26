@@ -1,0 +1,308 @@
+{
+  "eval_set_id": "pregnancy_companion_integration_suite",
+  "description": "Comprehensive evaluation suite for Pregnancy Companion Agent covering patient registration, risk assessment, tool usage, and response quality",
+  "eval_cases": [
+    {
+      "eval_id": "new_patient_registration",
+      "description": "Test patient registration with complete information",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "Hello! My name is Amina, phone +221 77 888 9999. I'm 26 years old. My last menstrual period was June 15, 2025. I live in Dakar, Senegal."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Hello Amina! Your estimated due date is March 22, 2026. You are currently about 23 weeks pregnant, with approximately 17 weeks remaining until your due date. How can I help you today?"
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "get_pregnancy_by_phone",
+                "args": {
+                  "phone": "+221 77 888 9999"
+                }
+              },
+              {
+                "name": "calculate_edd",
+                "args": {
+                  "lmp_date": "2025-06-15"
+                }
+              },
+              {
+                "name": "infer_country_from_location",
+                "args": {
+                  "location": "Dakar"
+                }
+              },
+              {
+                "name": "upsert_pregnancy_record",
+                "args": {
+                  "phone": "+221 77 888 9999",
+                  "name": "Amina",
+                  "age": 26,
+                  "lmp_date": "2025-06-15",
+                  "location": "Dakar",
+                  "country": "Senegal"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "existing_patient_anc_schedule",
+      "description": "Test ANC schedule retrieval for existing patient",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "My phone is +225 07 111 2222. When is my next ANC visit?"
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Your next ANC visit is scheduled for December 10, 2025. This will be your 4th visit at 30 weeks."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "get_pregnancy_by_phone",
+                "args": {
+                  "phone": "+225 07 111 2222"
+                }
+              },
+              {
+                "name": "calculate_anc_schedule",
+                "args": {
+                  "lmp_date": "2025-05-20"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "high_risk_emergency",
+      "description": "Test high-risk symptom detection and nurse agent delegation",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "I'm having severe bleeding and intense abdominal pain. I feel very dizzy."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "This is a HIGH RISK situation requiring immediate medical attention. Please go to the nearest hospital emergency room right away. Emergency contact: [ambulance number]. Do not delay."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "nurse_agent",
+                "args": {
+                  "message": "Patient reports severe bleeding, intense abdominal pain, and dizziness"
+                }
+              },
+              {
+                "name": "google_search",
+                "args": {
+                  "query": "emergency ambulance Senegal"
+                }
+              },
+              {
+                "name": "upsert_pregnancy_record",
+                "args": {
+                  "risk_level": "High"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "nutrition_guidance_request",
+      "description": "Test nutrition information retrieval via google_search",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "What foods are rich in iron that I should eat during pregnancy?"
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Iron-rich foods for pregnancy include: leafy greens (spinach, kale), beans and lentils, lean red meat, fortified cereals, and dried fruits. Pair with vitamin C foods for better absorption."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "google_search",
+                "args": {
+                  "query": "iron rich foods pregnancy"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "low_risk_reassurance",
+      "description": "Test low-risk scenario with appropriate reassurance",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "I'm 28, healthy, first pregnancy. My LMP was July 1, 2025. Everything feels normal."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Congratulations! Your estimated due date is April 7, 2026. This sounds like a healthy, low-risk pregnancy. Continue with regular ANC visits, eat well, stay hydrated, and rest when needed."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "calculate_edd",
+                "args": {
+                  "lmp_date": "2025-07-01"
+                }
+              },
+              {
+                "name": "calculate_anc_schedule",
+                "args": {
+                  "lmp_date": "2025-07-01"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "health_facility_search",
+      "description": "Test health facility location via google_search",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "I need to find a maternity hospital in Dakar. Can you help?"
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Here are maternity hospitals in Dakar: Hospital Principal de Dakar, Hopital Abass Ndao, Clinique Casahous. Contact information: [phone numbers and addresses from search]."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "google_search",
+                "args": {
+                  "query": "maternity hospitals Dakar Senegal phone number address"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "moderate_risk_monitoring",
+      "description": "Test moderate risk assessment with monitoring advice",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "I have a mild headache and my feet are a bit swollen. Should I be worried?"
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "This is MODERATE RISK. Monitor symptoms closely. Watch for severe headache, vision changes, or severe swelling. If symptoms worsen, seek medical care. Reduce salt intake and elevate feet when resting."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "nurse_agent",
+                "args": {
+                  "message": "Patient reports mild headache and foot swelling"
+                }
+              },
+              {
+                "name": "google_search",
+                "args": {
+                  "query": "foods reduce swelling pregnancy"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "invalid_date_handling",
+      "description": "Test error handling for invalid date format",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [
+              {
+                "text": "My last period was about two months ago."
+              }
+            ]
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Could you please provide the exact date your last menstrual period started? I need it in YYYY-MM-DD format (for example: 2025-09-15) to calculate your due date accurately."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": []
+          }
+        }
+      ]
+    }
+  ]
+}

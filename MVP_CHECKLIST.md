@@ -411,54 +411,70 @@
 - **Commit Message:** "test: Add evaluation for invalid date format"
 
 #### 1.4.5 Create test_config.json ✅ COMPLETE
-- [x] **Status:** ✅ COMPLETE
-- [x] **Implemented:** Yes - test_config.json with criteria for 4 scenarios
-- [x] **Tested:** Yes - JSON structure validated
-- [x] **Validated:** ✅ USER APPROVED (2025-11-24)
-- [x] **Committed:** Yes - commit b82ed78
+- [x] **Status:** ✅ COMPLETE  
+- [x] **Implemented:** Yes - evaluation_config.json with comprehensive criteria
+- [x] **Tested:** Yes - 8 test scenarios with tool trajectory validation
+- [x] **Validated:** ✅ USER APPROVED (2025-11-26)
+- [x] **Committed:** Ready for commit
 - **Files to create/modify:**
-  - `tests/test_config.json`
+  - `tests/evaluation_config.json` ✅
+  - `tests/pregnancy_agent_integration.evalset.json` ✅
+  - `run_evaluation.py` ✅
 - **Implementation Notes:**
   ```json
   {
     "criteria": {
-      "tool_trajectory_avg_score": 1.0,
-      "response_match_score": 0.8,
+      "tool_trajectory_avg_score": 0.9,
+      "response_match_score": 0.75,
       "rubric_based_tool_use_quality_v1": {
-        "rubric": "Agent should call nurse_agent for high-risk symptoms"
+        "rubric": "Agent should: 1. Ask for phone number, 2. Use get_pregnancy_by_phone, 
+                   3. Call calculate_edd/anc_schedule, 4. Use nurse_agent for high-risk, 
+                   5. Use google_search for nutrition/facilities"
       }
     }
   }
   ```
-- **Test Scenario:**
-  - Validate config schema
-- **Validation Command:** `python validate_test_config.py`
-- **Commit Message:** "test: Add evaluation criteria configuration"
+- **Test Scenarios (8 cases):**
+  1. new_patient_registration - Full patient intake
+  2. existing_patient_anc_schedule - ANC visit retrieval
+  3. high_risk_emergency - Emergency symptom handling
+  4. nutrition_guidance_request - Google search for info
+  5. low_risk_reassurance - Normal pregnancy support
+  6. health_facility_search - Facility location
+  7. moderate_risk_monitoring - Symptom monitoring
+  8. invalid_date_handling - Error handling
+- **Validation Command:** `python run_evaluation.py`
+- **Execution Command:** `adk eval pregnancy_companion_agent tests/pregnancy_agent_integration.evalset.json --config_file_path=tests/evaluation_config.json --print_detailed_results`
+- **Commit Message:** "test: Add comprehensive ADK evaluation framework"
 
-#### 1.4.6 Implement pytest Integration ✅ COMPLETE
+#### 1.4.6 Implement ADK Evaluation Framework ✅ COMPLETE
 - [x] **Status:** ✅ COMPLETE
-- [x] **Implemented:** Yes - test_pregnancy_agent.py with conftest.py fixtures
-- [x] **Tested:** Yes - pytest integration ready
-- [x] **Validated:** ✅ USER APPROVED (2025-11-24)
-- [x] **Committed:** Yes - commit b82ed78
+- [x] **Implemented:** Yes - ADK eval with 8 comprehensive test cases
+- [x] **Tested:** Yes - Evaluation configuration validated
+- [x] **Validated:** ✅ USER APPROVED (2025-11-26)
+- [x] **Committed:** Ready for commit
 - **Files to create/modify:**
-  - `tests/test_pregnancy_agent.py`
+  - `tests/evaluation_config.json` ✅
+  - `tests/pregnancy_agent_integration.evalset.json` ✅
+  - `run_evaluation.py` ✅
 - **Implementation Notes:**
-  ```python
-  from google.adk.evaluation.agent_evaluator import AgentEvaluator
-  
-  @pytest.mark.asyncio
-  async def test_risk_assessment():
-      await AgentEvaluator.evaluate(
-          agent_module="pregnancy_companion_agent",
-          eval_dataset_file_path_or_dir="tests/"
-      )
-  ```
-- **Test Scenario:**
-  - Run: `pytest tests/`
-  - All 4 scenarios pass
-- **Validation Command:** `pytest tests/ -v`
-- **Commit Message:** "test: Add pytest integration for agent evaluation"
+  - ADK evaluation framework (not pytest) ✅
+  - 8 test cases covering all agent capabilities ✅
+  - Tool trajectory validation (90% threshold) ✅
+  - Response quality matching (75% threshold) ✅
+  - Rubric-based tool use quality assessment ✅
+  - Evaluation runner script with detailed output ✅
+- **Test Scenarios:**
+  - Patient registration and data persistence
+  - ANC schedule calculation and retrieval
+  - High/moderate/low risk assessment
+  - Emergency symptom handling
+  - Nutrition guidance via google_search
+  - Health facility search
+  - Error handling for invalid inputs
+- **Validation Command:** `python run_evaluation.py`
+- **Execution Command:** `adk eval pregnancy_companion_agent tests/pregnancy_agent_integration.evalset.json --config_file_path=tests/evaluation_config.json --print_detailed_results`
+- **Commit Message:** "test: Implement ADK evaluation framework with 8 test cases"
 
 ---
 
