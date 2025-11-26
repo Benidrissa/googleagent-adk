@@ -311,6 +311,16 @@ export default function ChatPage() {
         <div className="footer">
           <p>🧪 Test Client for Pregnancy Companion Agent API</p>
           <p>API Endpoint: {API_URL}</p>
+          <p>
+            <a 
+              href="http://localhost:3000/test_eval_api.html" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              style={{ color: '#667eea', textDecoration: 'underline' }}
+            >
+              🔍 View Live Evaluation API Test (No Cache)
+            </a>
+          </p>
         </div>
       </div>
     </div>

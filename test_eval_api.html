@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Evaluation API Test - No Cache</title>
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <style>
+        body { font-family: monospace; padding: 20px; background: #f5f5f5; }
+        .result { background: white; padding: 15px; margin: 10px 0; border-left: 4px solid #4CAF50; }
+        .conversation { background: #e3f2fd; padding: 10px; margin: 10px 0; }
+        .user { color: #1976d2; font-weight: bold; }
+        .agent { color: #388e3c; }
+        button { padding: 10px 20px; background: #667eea; color: white; border: none; cursor: pointer; font-size: 16px; }
+        button:hover { background: #5568d3; }
+        #timestamp { color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Live Evaluation API Test (Cache-Bypassed)</h1>
+    <p id="timestamp">Loading...</p>
+    <button onclick="loadResults()">🔄 Refresh Data</button>
+    <div id="results"></div>
+
+    <script>
+        async function loadResults() {
+            document.getElementById('timestamp').textContent = 'Loading at ' + new Date().toLocaleTimeString() + '...';
+            
+            try {
+                // Add timestamp to bypass cache
+                const response = await fetch('http://localhost:8001/evaluation/results?t=' + Date.now());
+                const data = await response.json();
+                
+                document.getElementById('timestamp').textContent = 
+                    'Last updated: ' + new Date().toLocaleTimeString() + 
+                    ' | Total results: ' + data.total;
+                
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '';
+                
+                data.results.slice(0, 3).forEach((result, idx) => {
+                    const div = document.createElement('div');
+                    div.className = 'result';
+                    
+                    let html = `
+                        <h3>${idx + 1}. ${result.eval_set_id}</h3>
+                        <p><strong>Timestamp:</strong> ${result.timestamp}</p>
+                        <p><strong>Status:</strong> ${result.passed} passed, ${result.failed} failed</p>
+                    `;
+                    
+                    if (result.eval_cases && result.eval_cases[0].conversation) {
+                        const conv = result.eval_cases[0].conversation[0];
+                        html += `
+                            <div class="conversation">
+                                <p class="user">👤 User: ${conv.user_content}</p>
+                                <p class="agent">🤖 Agent: ${conv.final_response.substring(0, 150)}...</p>
+                            </div>
+                        `;
+                    }
+                    
+                    div.innerHTML = html;
+                    resultsDiv.appendChild(div);
+                });
+            } catch (error) {
+                document.getElementById('results').innerHTML = 
+                    '<div class="result" style="border-color: red">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Load on page load
+        loadResults();
+        
+        // Auto-refresh every 5 seconds
+        setInterval(loadResults, 5000);
+    </script>
+</body>
+</html>
