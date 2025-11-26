@@ -276,11 +276,15 @@ def test_phone_based_lookup():
     """Test 7: Phone-Based Patient Lookup - Persistent Records"""
     print_section("TEST 7: Phone-Based Patient Lookup")
 
+    # Generate unique phone number for this test
+    timestamp = datetime.now().strftime('%M%S')
+    test_phone = f"+223 70 {timestamp[:2]} {timestamp[2:]} 99"
+
     # First interaction with phone number
     session_id_1 = f"phone_test_1_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     response1 = send_message(
         session_id_1,
-        "Hello, my phone is +223 70 99 88 77. My name is Aissata. I'm 23. My LMP was June 15, 2025. I live in Conakry, Guinea.",
+        f"Hello, my phone is {test_phone}. My name is Kadiatou. I'm 26. My LMP was May 10, 2025. I live in Bamako, Mali.",
     )
 
     if not response1:
@@ -296,12 +300,12 @@ def test_phone_based_lookup():
     session_id_2 = f"phone_test_2_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     response2 = send_message(
         session_id_2,
-        "Hi, my phone number is +223 70 99 88 77. What is my next ANC visit?",
+        f"Hi, my phone number is {test_phone}. What is my next ANC visit?",
     )
 
     if response2:
         # Check if agent recognized the patient
-        if "aissata" in response2.lower() or "visit" in response2.lower():
+        if "kadiatou" in response2.lower() or "visit" in response2.lower():
             print("✅ TEST 7 PASSED: Patient recognized by phone number")
             return True
         else:
