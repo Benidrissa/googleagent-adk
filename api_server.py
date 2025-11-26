@@ -243,12 +243,14 @@ async def loop_callback(
 
 if __name__ == "__main__":
     import uvicorn
+    import os
 
-    logger.info("Starting development server...")
+    port = int(os.getenv("PORT", "8002"))
+    logger.info(f"Starting development server on port {port}...")
     uvicorn.run(
         "api_server:app",  # Use string import for reload to work
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info",
         reload=True,  # Enable auto-reload in development
     )
