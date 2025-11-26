@@ -24,8 +24,8 @@ interface EvalResult {
 
 export default function EvaluationPage() {
   const [evalResults, setEvalResults] = useState<EvalResult[]>([])
-  const [selectedResult, setSelectedResult] = useState<EvalResult | null>(null)
-  const [selectedCase, setSelectedCase] = useState<EvalCase | null>(null)
+  const [expandedRunId, setExpandedRunId] = useState<number | null>(null)
+  const [expandedCaseId, setExpandedCaseId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -33,11 +33,15 @@ export default function EvaluationPage() {
     setLoading(true)
     setError('')
     try {
-      // Try to fetch evaluation results from API
       const response = await axios.get('/api/evaluation/results')
-      setEvalResults(response.data.results || [])
+      const results = response.data.results || []
+      setEvalResults(results)
+      
+      // Auto-expand first result if available
+      if (results.length > 0) {
+        setExpandedRunId(0)
+      }
     } catch (err: any) {
-      // Show actual error message
       setError(err.response?.data?.detail || err.message || 'Failed to fetch evaluation results')
       setEvalResults([])
       console.error('Error fetching evaluation results:', err)
@@ -49,6 +53,15 @@ export default function EvaluationPage() {
   useEffect(() => {
     fetchEvaluationResults()
   }, [])
+
+  const toggleRun = (idx: number) => {
+    setExpandedRunId(expandedRunId === idx ? null : idx)
+    setExpandedCaseId(null)
+  }
+
+  const toggleCase = (caseId: string) => {
+    setExpandedCaseId(expandedCaseId === caseId ? null : caseId)
+  }
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -83,34 +96,36 @@ export default function EvaluationPage() {
           </div>
         )}
 
-        <div className="evaluation-layout">
-          {/* Left Panel: Evaluation Runs List */}
-          <div className="evaluation-runs">
-            <h2>Evaluation Runs</h2>
-            {evalResults.length === 0 ? (
-              <div className="no-results">
-                <p>No evaluation results found.</p>
-                <p className="hint">Run: adk eval agent_eval tests/pregnancy_agent_integration.evalset.json</p>
-              </div>
-            ) : (
-              evalResults.map((result, idx) => (
+        {loading ? (
+          <div className="no-results">
+            <p>⏳ Loading evaluation results...</p>
+          </div>
+        ) : evalResults.length === 0 ? (
+          <div className="no-results">
+            <h2>📭 No Evaluations Available</h2>
+            <p>No evaluation results have been generated yet.</p>
+          </div>
+        ) : (
+          <div className="accordion-container">
+            {evalResults.map((result, idx) => (
+              <div key={idx} className="accordion-item">
                 <div 
-                  key={idx} 
-                  className={`eval-run-card ${selectedResult === result ? 'selected' : ''}`}
-                  onClick={() => setSelectedResult(result)}
+                  className={`accordion-header ${expandedRunId === idx ? 'expanded' : ''}`}
+                  onClick={() => toggleRun(idx)}
                 >
-                  <div className="eval-run-header">
+                  <div className="accordion-title">
+                    <span className="accordion-icon">{expandedRunId === idx ? '▼' : '▶'}</span>
                     <strong>{result.eval_set_id}</strong>
-                    <span className="eval-timestamp">
-                      {new Date(result.timestamp).toLocaleString()}
+                  </div>
+                  <div className="accordion-meta">
+                    <span className="timestamp">{new Date(result.timestamp).toLocaleString()}</span>
+                    <span className="stats">
+                      <span className="stat-passed">✓ {result.passed}</span>
+                      <span className="stat-failed">✗ {result.failed}</span>
+                      <span className="stat-total">Total: {result.total_cases}</span>
                     </span>
                   </div>
-                  <div className="eval-run-stats">
-                    <span className="stat-passed">✓ {result.passed}</span>
-                    <span className="stat-failed">✗ {result.failed}</span>
-                    <span className="stat-total">Total: {result.total_cases}</span>
-                  </div>
-                  <div className="eval-run-progress">
+                  <div className="progress-bar-container">
                     <div 
                       className="progress-bar"
                       style={{ 
@@ -120,160 +135,145 @@ export default function EvaluationPage() {
                     />
                   </div>
                 </div>
-              ))
-            )}
-          </div>
 
-          {/* Middle Panel: Test Cases */}
-          {selectedResult && (
-            <div className="evaluation-cases">
-              <h2>Test Cases</h2>
-              {selectedResult.eval_cases.map((evalCase, idx) => (
-                <div 
-                  key={idx} 
-                  className={`eval-case-card ${selectedCase === evalCase ? 'selected' : ''}`}
-                  onClick={() => setSelectedCase(evalCase)}
-                >
-                  <div className="eval-case-header">
-                    <span 
-                      className="eval-status"
-                      style={{ backgroundColor: getStatusColor(evalCase.status) }}
-                    >
-                      {evalCase.status}
-                    </span>
-                    <strong>{evalCase.eval_id}</strong>
-                  </div>
-                  {evalCase.metrics && (
-                    <div className="eval-metrics-summary">
-                      <div className="metric-badge">
-                        <span className="metric-label">Tool Score:</span>
-                        <span 
-                          className="metric-value"
-                          style={{ 
-                            color: getScoreColor(
-                              evalCase.metrics.tool_trajectory_avg_score || 0, 
-                              0.9
-                            )
-                          }}
-                        >
-                          {((evalCase.metrics.tool_trajectory_avg_score || 0) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="metric-badge">
-                        <span className="metric-label">Response:</span>
-                        <span 
-                          className="metric-value"
-                          style={{ 
-                            color: getScoreColor(
-                              evalCase.metrics.response_match_score || 0, 
-                              0.75
-                            )
-                          }}
-                        >
-                          {((evalCase.metrics.response_match_score || 0) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Right Panel: Case Details */}
-          {selectedCase && (
-            <div className="evaluation-details">
-              <h2>Case Details: {selectedCase.eval_id}</h2>
-              
-              <div className="detail-section">
-                <h3>Status</h3>
-                <div 
-                  className="status-badge-large"
-                  style={{ backgroundColor: getStatusColor(selectedCase.status) }}
-                >
-                  {selectedCase.status}
-                </div>
-              </div>
-
-              {selectedCase.metrics && (
-                <div className="detail-section">
-                  <h3>Metrics</h3>
-                  <div className="metrics-grid">
-                    <div className="metric-card">
-                      <div className="metric-name">Tool Trajectory</div>
-                      <div 
-                        className="metric-score"
-                        style={{ 
-                          color: getScoreColor(
-                            selectedCase.metrics.tool_trajectory_avg_score || 0, 
-                            0.9
-                          )
-                        }}
-                      >
-                        {((selectedCase.metrics.tool_trajectory_avg_score || 0) * 100).toFixed(1)}%
-                      </div>
-                      <div className="metric-threshold">Threshold: 90%</div>
-                    </div>
-                    <div className="metric-card">
-                      <div className="metric-name">Response Match</div>
-                      <div 
-                        className="metric-score"
-                        style={{ 
-                          color: getScoreColor(
-                            selectedCase.metrics.response_match_score || 0, 
-                            0.75
-                          )
-                        }}
-                      >
-                        {((selectedCase.metrics.response_match_score || 0) * 100).toFixed(1)}%
-                      </div>
-                      <div className="metric-threshold">Threshold: 75%</div>
-                    </div>
-                    {selectedCase.metrics.rubric_based_tool_use_quality_v1 !== undefined && (
-                      <div className="metric-card">
-                        <div className="metric-name">Rubric Quality</div>
+                {expandedRunId === idx && (
+                  <div className="accordion-content">
+                    {result.eval_cases.map((evalCase, caseIdx) => (
+                      <div key={caseIdx} className="case-accordion-item">
                         <div 
-                          className="metric-score"
-                          style={{ 
-                            color: getScoreColor(
-                              selectedCase.metrics.rubric_based_tool_use_quality_v1, 
-                              0.8
-                            )
-                          }}
+                          className={`case-accordion-header ${expandedCaseId === evalCase.eval_id ? 'expanded' : ''}`}
+                          onClick={() => toggleCase(evalCase.eval_id)}
                         >
-                          {(selectedCase.metrics.rubric_based_tool_use_quality_v1 * 100).toFixed(1)}%
+                          <div className="case-title">
+                            <span className="accordion-icon">{expandedCaseId === evalCase.eval_id ? '▼' : '▶'}</span>
+                            <span 
+                              className="case-status"
+                              style={{ backgroundColor: getStatusColor(evalCase.status) }}
+                            >
+                              {evalCase.status}
+                            </span>
+                            <strong>{evalCase.eval_id}</strong>
+                          </div>
+                          {evalCase.metrics && (
+                            <div className="case-metrics-preview">
+                              <span 
+                                className="metric-preview"
+                                style={{ 
+                                  color: getScoreColor(
+                                    evalCase.metrics.tool_trajectory_avg_score || 0, 
+                                    0.9
+                                  )
+                                }}
+                              >
+                                Tool: {((evalCase.metrics.tool_trajectory_avg_score || 0) * 100).toFixed(0)}%
+                              </span>
+                              <span 
+                                className="metric-preview"
+                                style={{ 
+                                  color: getScoreColor(
+                                    evalCase.metrics.response_match_score || 0, 
+                                    0.75
+                                  )
+                                }}
+                              >
+                                Response: {((evalCase.metrics.response_match_score || 0) * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                          )}
                         </div>
-                        <div className="metric-threshold">Threshold: 80%</div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
 
-              <div className="detail-section">
-                <h3>Conversation</h3>
-                <div className="conversation-viewer">
-                  {selectedCase.conversation.map((turn: any, idx: number) => (
-                    <div key={idx} className="conversation-turn">
-                      {turn.user_content && (
-                        <div className="turn-message user-turn">
-                          <div className="turn-label">👤 User</div>
-                          <div className="turn-content">{turn.user_content}</div>
-                        </div>
-                      )}
-                      {turn.final_response && (
-                        <div className="turn-message agent-turn">
-                          <div className="turn-label">🤖 Agent</div>
-                          <div className="turn-content">{turn.final_response}</div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        {expandedCaseId === evalCase.eval_id && (
+                          <div className="case-accordion-content">
+                            {evalCase.metrics && (
+                              <div className="metrics-section">
+                                <h4>📊 Metrics</h4>
+                                <div className="metrics-grid">
+                                  <div className="metric-card">
+                                    <div className="metric-name">Tool Trajectory</div>
+                                    <div 
+                                      className="metric-score"
+                                      style={{ 
+                                        color: getScoreColor(
+                                          evalCase.metrics.tool_trajectory_avg_score || 0, 
+                                          0.9
+                                        )
+                                      }}
+                                    >
+                                      {((evalCase.metrics.tool_trajectory_avg_score || 0) * 100).toFixed(1)}%
+                                    </div>
+                                    <div className="metric-threshold">Threshold: 90%</div>
+                                  </div>
+                                  <div className="metric-card">
+                                    <div className="metric-name">Response Match</div>
+                                    <div 
+                                      className="metric-score"
+                                      style={{ 
+                                        color: getScoreColor(
+                                          evalCase.metrics.response_match_score || 0, 
+                                          0.75
+                                        )
+                                      }}
+                                    >
+                                      {((evalCase.metrics.response_match_score || 0) * 100).toFixed(1)}%
+                                    </div>
+                                    <div className="metric-threshold">Threshold: 75%</div>
+                                  </div>
+                                  {evalCase.metrics.rubric_based_tool_use_quality_v1 !== undefined && (
+                                    <div className="metric-card">
+                                      <div className="metric-name">Rubric Quality</div>
+                                      <div 
+                                        className="metric-score"
+                                        style={{ 
+                                          color: getScoreColor(
+                                            evalCase.metrics.rubric_based_tool_use_quality_v1, 
+                                            0.8
+                                          )
+                                        }}
+                                      >
+                                        {(evalCase.metrics.rubric_based_tool_use_quality_v1 * 100).toFixed(1)}%
+                                      </div>
+                                      <div className="metric-threshold">Threshold: 80%</div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {evalCase.conversation.length > 0 && (
+                              <div className="conversation-section">
+                                <h4>💬 Conversation</h4>
+                                <div className="conversation-viewer">
+                                  {evalCase.conversation.map((turn: any, turnIdx: number) => (
+                                    <div key={turnIdx} className="conversation-turn">
+                                      {turn.user_content && (
+                                        <div className="turn-message user-turn">
+                                          <div className="turn-label">👤 User</div>
+                                          <div className="turn-content">{turn.user_content}</div>
+                                        </div>
+                                      )}
+                                      {turn.final_response !== undefined && (
+                                        <div className="turn-message agent-turn">
+                                          <div className="turn-label">🤖 Agent</div>
+                                          <div className="turn-content">
+                                            {turn.final_response || <em style={{color: '#888'}}>No response generated</em>}
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
