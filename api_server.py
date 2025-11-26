@@ -233,7 +233,11 @@ async def get_evaluation_results():
         for eval_file in eval_files:
             try:
                 with open(eval_file, 'r') as f:
-                    data = json.load(f)
+                    content = f.read()
+                    # The file contains a JSON string, so we need to parse it twice
+                    if content.startswith('"'):
+                        content = json.loads(content)  # First parse removes outer quotes
+                    data = json.loads(content) if isinstance(content, str) else content
                     
                     # Parse eval cases
                     eval_cases = []
