@@ -17,17 +17,45 @@ interface ChatResponse {
 const API_URL = '/api'
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'system',
-      content: 'Welcome to the Pregnancy Companion Agent! Start a conversation by typing below.',
-      timestamp: new Date().toISOString()
+  // Load persisted state from localStorage
+  const loadPersistedState = () => {
+    try {
+      const savedMessages = localStorage.getItem('chatMessages')
+      const savedSessionId = localStorage.getItem('chatSessionId')
+      const savedUserId = localStorage.getItem('chatUserId')
+      
+      return {
+        messages: savedMessages ? JSON.parse(savedMessages) : [
+          {
+            role: 'system',
+            content: 'Welcome to the Pregnancy Companion Agent! Start a conversation by typing below.',
+            timestamp: new Date().toISOString()
+          }
+        ],
+        sessionId: savedSessionId || '',
+        userId: savedUserId || 'test_user_' + Date.now()
+      }
+    } catch {
+      return {
+        messages: [
+          {
+            role: 'system',
+            content: 'Welcome to the Pregnancy Companion Agent! Start a conversation by typing below.',
+            timestamp: new Date().toISOString()
+          }
+        ],
+        sessionId: '',
+        userId: 'test_user_' + Date.now()
+      }
     }
-  ])
+  }
+
+  const persistedState = loadPersistedState()
+  const [messages, setMessages] = useState<Message[]>(persistedState.messages)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [sessionId, setSessionId] = useState<string>('')
-  const [userId, setUserId] = useState('test_user_' + Date.now())
+  const [sessionId, setSessionId] = useState<string>(persistedState.sessionId)
+  const [userId, setUserId] = useState(persistedState.userId)
   const [error, setError] = useState<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -38,6 +66,19 @@ export default function ChatPage() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Persist state to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('chatMessages', JSON.stringify(messages))
+  }, [messages])
+
+  useEffect(() => {
+    localStorage.setItem('chatSessionId', sessionId)
+  }, [sessionId])
+
+  useEffect(() => {
+    localStorage.setItem('chatUserId', userId)
+  }, [userId])
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return
@@ -92,14 +133,22 @@ export default function ChatPage() {
   }
 
   const clearChat = () => {
-    setMessages([{
+    const newMessages = [{
       role: 'system',
       content: 'Chat cleared. Starting new conversation.',
       timestamp: new Date().toISOString()
-    }])
+    }]
+    const newUserId = 'test_user_' + Date.now()
+    
+    setMessages(newMessages)
     setSessionId('')
-    setUserId('test_user_' + Date.now())
+    setUserId(newUserId)
     setError('')
+    
+    // Clear localStorage
+    localStorage.setItem('chatMessages', JSON.stringify(newMessages))
+    localStorage.setItem('chatSessionId', '')
+    localStorage.setItem('chatUserId', newUserId)
   }
 
   const checkHealth = async () => {

@@ -25,8 +25,6 @@ export default function LogsPage() {
     setLoading(true)
     setError('')
     try {
-      // For now, we'll read logs from a file endpoint
-      // You may need to implement this in your API server
       const response = await axios.get('/api/logs', {
         params: {
           level: levelFilter !== 'all' ? levelFilter : undefined,
@@ -35,45 +33,8 @@ export default function LogsPage() {
       })
       setLogs(response.data.logs || [])
     } catch (err: any) {
-      // If API endpoint doesn't exist, show sample data
-      setError('Logs endpoint not yet implemented. Showing sample data.')
-      setLogs([
-        {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: 'Pregnancy Companion Agent initialized',
-          trace_id: '0x' + Math.random().toString(16).slice(2, 18)
-        },
-        {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: 'User message received',
-          trace_id: '0x' + Math.random().toString(16).slice(2, 18)
-        },
-        {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: 'Tool call: get_pregnancy_by_phone',
-          tool_name: 'get_pregnancy_by_phone',
-          tool_args: { phone: '+221 77 888 9999' },
-          trace_id: '0x' + Math.random().toString(16).slice(2, 18),
-          span_id: '0x' + Math.random().toString(16).slice(2, 18)
-        },
-        {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: 'Tool response received',
-          tool_name: 'get_pregnancy_by_phone',
-          tool_response: { status: 'success', record: { name: 'Amina', phone: '+221 77 888 9999' } },
-          trace_id: '0x' + Math.random().toString(16).slice(2, 18)
-        },
-        {
-          timestamp: new Date().toISOString(),
-          level: 'INFO',
-          message: 'Agent response generated',
-          trace_id: '0x' + Math.random().toString(16).slice(2, 18)
-        }
-      ])
+      setError(err.response?.data?.detail || err.message || 'Failed to fetch logs')
+      setLogs([])
     } finally {
       setLoading(false)
     }

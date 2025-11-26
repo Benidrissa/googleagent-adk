@@ -171,73 +171,36 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
     
     logs = []
     
-    # Try to read from OpenTelemetry trace files or logs
-    trace_dir = Path("agent_eval/.adk/traces")
+    # Try to read from actual log files
     log_file = Path("data/agent.log")
     
-    # For now, return structured sample data that mirrors what would come from actual tracing
-    # In production, this would read from your logging/tracing backend
-    sample_logs = [
-        {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "Pregnancy Companion Agent initialized",
-            "trace_id": "0x24b04fa32bb5e8a4",
-            "span_id": None,
-            "tool_name": None,
-            "tool_args": None,
-            "tool_response": None
-        },
-        {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "User message received",
-            "trace_id": "0xe40ccb14e44bbc12",
-            "span_id": "0x1a2b3c4d5e6f7890",
-            "tool_name": None,
-            "tool_args": None,
-            "tool_response": None
-        },
-        {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "Tool call: get_pregnancy_by_phone",
-            "trace_id": "0x995876b3c924ca89",
-            "span_id": "0x2b3c4d5e6f78901a",
-            "tool_name": "get_pregnancy_by_phone",
-            "tool_args": {"phone": "+226707070"},
-            "tool_response": None
-        },
-        {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "Tool response received",
-            "trace_id": "0x882b1652fa01986c",
-            "span_id": "0x3c4d5e6f78901a2b",
-            "tool_name": "get_pregnancy_by_phone",
-            "tool_args": None,
-            "tool_response": {"status": "success", "record": {"name": "Fatou", "age": 39}}
-        },
-        {
-            "timestamp": datetime.datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "Agent response generated",
-            "trace_id": "0x09add57311573fab",
-            "span_id": "0x4d5e6f78901a2b3c",
-            "tool_name": None,
-            "tool_args": None,
-            "tool_response": None
-        }
-    ]
-    
-    # Filter by level if specified
-    if level and level.upper() != "ALL":
-        logs = [log for log in sample_logs if log["level"] == level.upper()]
-    else:
-        logs = sample_logs
-    
-    # Apply limit
-    logs = logs[:limit]
+    if log_file.exists():
+        try:
+            with open(log_file, 'r') as f:
+                lines = f.readlines()[-limit:]  # Get last N lines
+                for line in lines:
+                    try:
+                        # Parse log line format: timestamp - level - message
+                        parts = line.strip().split(' - ', 2)
+                        if len(parts) >= 3:
+                            log_entry = {
+                                "timestamp": parts[0],
+                                "level": parts[1],
+                                "message": parts[2],
+                                "trace_id": None,
+                                "span_id": None,
+                                "tool_name": None,
+                                "tool_args": None,
+                                "tool_response": None
+                            }
+                            
+                            # Filter by level if specified
+                            if not level or level.upper() == "ALL" or parts[1] == level.upper():
+                                logs.append(log_entry)
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.error(f"Error reading log file: {e}")
     
     return {"logs": logs, "total": len(logs)}
 
@@ -252,56 +215,97 @@ async def get_evaluation_results():
     """
     import json
     from pathlib import Path
+    import os
     
     results = []
     
-    # Try to read from ADK evaluation history
+    # Read from ADK evaluation history
     eval_history_dir = Path("agent_eval/.adk/eval_history")
-    evalset_file = Path("tests/pregnancy_agent_integration.evalset.json")
     
-    # For now, return structured sample data
-    # In production, this would parse actual evaluation results from .adk/eval_history/
-    sample_result = {
-        "eval_set_id": "pregnancy_companion_integration_suite",
-        "timestamp": datetime.datetime.now().isoformat(),
-        "total_cases": 2,
-        "passed": 0,
-        "failed": 2,
-        "eval_cases": [
-            {
-                "eval_id": "new_patient_registration",
-                "status": "FAILED",
-                "conversation": [
-                    {
-                        "user_content": "Hello! My name is Amina, phone +221 77 888 9999. I'm 29 years old, last period was May 22, 2025, living in Dakar, Senegal.",
-                        "final_response": "Hello Amina! I've registered your information. Your estimated due date is February 26, 2026. You're currently at 26 weeks. Let me know if you need information about ANC visits or have any questions!"
+    if eval_history_dir.exists():
+        # Get all eval result files, sorted by modification time (newest first)
+        eval_files = sorted(
+            eval_history_dir.glob("*.evalset_result.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        
+        for eval_file in eval_files:
+            try:
+                with open(eval_file, 'r') as f:
+                    data = json.load(f)
+                    
+                    # Parse eval cases
+                    eval_cases = []
+                    passed = 0
+                    failed = 0
+                    not_evaluated = 0
+                    
+                    for case in data.get("eval_case_results", []):
+                        # Map final_eval_status: 1=PASSED, 2=FAILED, 3=NOT_EVALUATED
+                        status_map = {1: "PASSED", 2: "FAILED", 3: "NOT_EVALUATED"}
+                        status = status_map.get(case.get("final_eval_status", 3), "NOT_EVALUATED")
+                        
+                        if status == "PASSED":
+                            passed += 1
+                        elif status == "FAILED":
+                            failed += 1
+                        else:
+                            not_evaluated += 1
+                        
+                        # Extract conversation
+                        conversation = []
+                        invocations = case.get("eval_metric_result_per_invocation", [])
+                        if invocations:
+                            inv = invocations[0].get("actual_invocation", {})
+                            user_content = ""
+                            final_response = ""
+                            
+                            # Get user content
+                            user_parts = inv.get("user_content", {}).get("parts", [])
+                            if user_parts:
+                                user_content = user_parts[0].get("text", "")
+                            
+                            # Get final response
+                            response_parts = inv.get("final_response", {}).get("parts", [])
+                            if response_parts:
+                                final_response = response_parts[0].get("text", "")
+                            
+                            conversation.append({
+                                "user_content": user_content,
+                                "final_response": final_response
+                            })
+                        
+                        # Extract metrics
+                        metrics = {}
+                        for metric_result in case.get("overall_eval_metric_results", []):
+                            metric_name = metric_result.get("metric_name")
+                            score = metric_result.get("score")
+                            if metric_name and score is not None:
+                                metrics[metric_name] = score
+                        
+                        eval_cases.append({
+                            "eval_id": case.get("eval_id", "unknown"),
+                            "status": status,
+                            "conversation": conversation,
+                            "metrics": metrics
+                        })
+                    
+                    # Create result entry
+                    result = {
+                        "eval_set_id": data.get("eval_set_id", "unknown"),
+                        "timestamp": datetime.datetime.fromtimestamp(eval_file.stat().st_mtime).isoformat(),
+                        "total_cases": len(eval_cases),
+                        "passed": passed,
+                        "failed": failed,
+                        "not_evaluated": not_evaluated,
+                        "eval_cases": eval_cases
                     }
-                ],
-                "metrics": {
-                    "tool_trajectory_avg_score": 0.0,
-                    "response_match_score": 0.34,
-                    "rubric_based_tool_use_quality_v1": 0.8
-                }
-            },
-            {
-                "eval_id": "nutrition_guidance_request",
-                "status": "FAILED",
-                "conversation": [
-                    {
-                        "user_content": "What foods are rich in iron that I should eat?",
-                        "final_response": "Foods rich in iron include leafy green vegetables (spinach, kale), beans and lentils, lean red meat, fortified cereals, and dried fruits. Iron is very important during pregnancy to prevent anemia."
-                    }
-                ],
-                "metrics": {
-                    "tool_trajectory_avg_score": 0.0,
-                    "response_match_score": 0.25,
-                    "rubric_based_tool_use_quality_v1": 0.75
-                }
-            }
-        ]
-    }
-    
-    results.append(sample_result)
+                    results.append(result)
+                    
+            except Exception as e:
+                logger.error(f"Error parsing eval file {eval_file}: {e}")
+                continue
     
     return {"results": results, "total": len(results)}
 

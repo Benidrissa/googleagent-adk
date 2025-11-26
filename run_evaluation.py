@@ -26,7 +26,7 @@ config_path = Path("tests/evaluation_config.json")
 if config_path.exists():
     with open(config_path, "r") as f:
         config = json.load(f)
-    
+
     print("\n✅ Evaluation Criteria Loaded:")
     for criterion, value in config["criteria"].items():
         if criterion == "rubric_based_tool_use_quality_v1":
@@ -48,17 +48,21 @@ evalset_path = Path("tests/pregnancy_agent_integration.evalset.json")
 if evalset_path.exists():
     with open(evalset_path, "r") as f:
         evalset = json.load(f)
-    
+
     print(f"\n📦 Eval Set ID: {evalset['eval_set_id']}")
     print(f"📝 Description: {evalset['description']}")
     print(f"\n✅ {len(evalset['eval_cases'])} Test Cases Loaded:\n")
-    
-    for i, case in enumerate(evalset['eval_cases'], 1):
+
+    for i, case in enumerate(evalset["eval_cases"], 1):
         print(f"{i}. {case['eval_id']}")
         print(f"   Description: {case['description']}")
-        user_msg = case['conversation'][0]['user_content']['parts'][0]['text']
-        print(f"   User Input: \"{user_msg[:80]}...\"" if len(user_msg) > 80 else f"   User Input: \"{user_msg}\"")
-        tool_count = len(case['conversation'][0]['intermediate_data']['tool_uses'])
+        user_msg = case["conversation"][0]["user_content"]["parts"][0]["text"]
+        print(
+            f'   User Input: "{user_msg[:80]}..."'
+            if len(user_msg) > 80
+            else f'   User Input: "{user_msg}"'
+        )
+        tool_count = len(case["conversation"][0]["intermediate_data"]["tool_uses"])
         print(f"   Expected Tools: {tool_count}")
         print()
 else:
@@ -74,8 +78,12 @@ print("  3. Rubric Adherence - Following agent behavior guidelines")
 print()
 
 print("📊 SCORING THRESHOLDS:")
-print(f"  • Tool Trajectory: {config['criteria']['tool_trajectory_avg_score'] * 100}% accuracy required")
-print(f"  • Response Match: {config['criteria']['response_match_score'] * 100}% similarity required")
+print(
+    f"  • Tool Trajectory: {config['criteria']['tool_trajectory_avg_score'] * 100}% accuracy required"
+)
+print(
+    f"  • Response Match: {config['criteria']['response_match_score'] * 100}% similarity required"
+)
 print()
 
 print("=" * 80)
@@ -89,7 +97,8 @@ print("=" * 80)
 
 print("\n📈 INTERPRETING RESULTS:")
 print("-" * 80)
-print("""
+print(
+    """
 EXAMPLE ANALYSIS:
 
 Test Case: new_patient_registration
@@ -116,7 +125,8 @@ KEY METRICS:
   • response_match_score = 0.8: Very similar, minor wording differences
   • response_match_score = 0.5: Partially similar, significant differences
   • response_match_score = 0.0: Completely different response
-""")
+"""
+)
 
 print("\n" + "=" * 80)
 print("EVALUATION SETUP COMPLETE ✅")
