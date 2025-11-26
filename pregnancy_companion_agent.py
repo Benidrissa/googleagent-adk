@@ -37,9 +37,9 @@ except ImportError:
 from google.adk.agents import LlmAgent
 from google.adk.models.google_llm import Gemini
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google.adk.sessions import InMemorySessionService, DatabaseSessionService
 from google.adk.memory import InMemoryMemoryService
-from google.adk.tools import AgentTool
+from google.adk.tools import AgentTool, load_memory, preload_memory
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
@@ -1100,6 +1100,281 @@ def assess_road_accessibility(location: str, destination: str = None) -> Dict[st
         return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
 
 
+# ============================================================================
+# PREGNANCY RECORD DATABASE TOOLS
+# ============================================================================
+
+# Initialize pregnancy records database
+# Use absolute path to avoid issues with relative paths
+_DATA_DIR = Path(__file__).parent / "data"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PREGNANCY_DB_PATH = _DATA_DIR / "pregnancy_records.db"
+
+
+def _init_pregnancy_db():
+    """Initialize the pregnancy records database schema."""
+    conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pregnancy_records (
+            phone TEXT PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            lmp_date TEXT,
+            edd TEXT,
+            location TEXT,
+            country TEXT,
+            risk_level TEXT,
+            medical_history TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_phone ON pregnancy_records(phone)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_country ON pregnancy_records(country)
+    """)
+    
+    conn.commit()
+    conn.close()
+
+
+# Initialize database on module load
+_init_pregnancy_db()
+logger.info("✅ Pregnancy records database initialized")
+
+
+def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
+    """
+    Retrieves pregnancy record by phone number (unique identifier).
+    
+    This tool allows the agent to check if a patient is already known
+    and retrieve their complete pregnancy profile including medical history.
+    
+    Args:
+        phone: Phone number (unique patient identifier)
+    
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "not_found"
+            - record: Patient pregnancy record if found
+            - message: Status message
+    """
+    if not phone or not phone.strip():
+        return {
+            "status": "error",
+            "error_message": "Phone number is required"
+        }
+    
+    phone = phone.strip()
+    
+    try:
+        conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT phone, name, age, lmp_date, edd, location, country, 
+                   risk_level, medical_history, created_at, updated_at
+            FROM pregnancy_records
+            WHERE phone = ?
+        """, (phone,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            record = {
+                "phone": row[0],
+                "name": row[1],
+                "age": row[2],
+                "lmp_date": row[3],
+                "edd": row[4],
+                "location": row[5],
+                "country": row[6],
+                "risk_level": row[7],
+                "medical_history": json.loads(row[8]) if row[8] else {},
+                "created_at": row[9],
+                "updated_at": row[10]
+            }
+            
+            logger.info(f"📋 Retrieved pregnancy record for phone: {phone}")
+            
+            return {
+                "status": "success",
+                "record": record,
+                "message": f"Found existing pregnancy record for {record['name']}"
+            }
+        else:
+            logger.info(f"📋 No pregnancy record found for phone: {phone}")
+            return {
+                "status": "not_found",
+                "message": f"No pregnancy record found for phone number {phone}. This appears to be a new patient."
+            }
+            
+    except Exception as e:
+        logger.error(f"Error retrieving pregnancy record: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Database error: {str(e)}"
+        }
+
+
+def upsert_pregnancy_record(
+    phone: str,
+    name: Optional[str] = None,
+    age: Optional[int] = None,
+    lmp_date: Optional[str] = None,
+    edd: Optional[str] = None,
+    location: Optional[str] = None,
+    country: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    medical_history: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """
+    Creates or updates a pregnancy record.
+    
+    This tool allows the agent to persist patient information across sessions.
+    Use phone number as the unique identifier. All other fields are optional
+    and will only update if provided.
+    
+    Args:
+        phone: Phone number (unique identifier, required)
+        name: Patient's name
+        age: Patient's age
+        lmp_date: Last Menstrual Period date (YYYY-MM-DD)
+        edd: Estimated Due Date (YYYY-MM-DD)
+        location: City/region location
+        country: Country
+        risk_level: Risk classification (low/moderate/high)
+        medical_history: Dictionary with medical history data
+    
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - action: "created" or "updated"
+            - record: The created/updated record
+            - message: Status message
+    """
+    if not phone or not phone.strip():
+        return {
+            "status": "error",
+            "error_message": "Phone number is required for creating/updating records"
+        }
+    
+    phone = phone.strip()
+    
+    try:
+        conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+        cursor = conn.cursor()
+        
+        # Check if record exists
+        cursor.execute("SELECT phone FROM pregnancy_records WHERE phone = ?", (phone,))
+        existing = cursor.fetchone()
+        action = "updated" if existing else "created"
+        
+        if existing:
+            # Build UPDATE query with only provided fields
+            update_fields = []
+            update_values = []
+            
+            if name is not None:
+                update_fields.append("name = ?")
+                update_values.append(name)
+            if age is not None:
+                update_fields.append("age = ?")
+                update_values.append(age)
+            if lmp_date is not None:
+                update_fields.append("lmp_date = ?")
+                update_values.append(lmp_date)
+            if edd is not None:
+                update_fields.append("edd = ?")
+                update_values.append(edd)
+            if location is not None:
+                update_fields.append("location = ?")
+                update_values.append(location)
+            if country is not None:
+                update_fields.append("country = ?")
+                update_values.append(country)
+            if risk_level is not None:
+                update_fields.append("risk_level = ?")
+                update_values.append(risk_level)
+            if medical_history is not None:
+                update_fields.append("medical_history = ?")
+                update_values.append(json.dumps(medical_history))
+            
+            update_fields.append("updated_at = CURRENT_TIMESTAMP")
+            update_values.append(phone)  # For WHERE clause
+            
+            if update_fields:
+                query = f"UPDATE pregnancy_records SET {', '.join(update_fields)} WHERE phone = ?"
+                cursor.execute(query, update_values)
+        else:
+            # INSERT new record
+            cursor.execute("""
+                INSERT INTO pregnancy_records 
+                (phone, name, age, lmp_date, edd, location, country, risk_level, medical_history)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                phone,
+                name,
+                age,
+                lmp_date,
+                edd,
+                location,
+                country,
+                risk_level,
+                json.dumps(medical_history) if medical_history else json.dumps({})
+            ))
+        
+        conn.commit()
+        
+        # Retrieve the final record
+        cursor.execute("""
+            SELECT phone, name, age, lmp_date, edd, location, country, 
+                   risk_level, medical_history, created_at, updated_at
+            FROM pregnancy_records
+            WHERE phone = ?
+        """, (phone,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        record = {
+            "phone": row[0],
+            "name": row[1],
+            "age": row[2],
+            "lmp_date": row[3],
+            "edd": row[4],
+            "location": row[5],
+            "country": row[6],
+            "risk_level": row[7],
+            "medical_history": json.loads(row[8]) if row[8] else {},
+            "created_at": row[9],
+            "updated_at": row[10]
+        }
+        
+        logger.info(f"💾 {action.capitalize()} pregnancy record for {name or phone}")
+        
+        return {
+            "status": "success",
+            "action": action,
+            "record": record,
+            "message": f"Successfully {action} pregnancy record for {name or phone}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error upserting pregnancy record: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Database error: {str(e)}"
+        }
+
+
 # --- SAFETY SETTINGS (Critical for Medical Applications) ---
 # We use BLOCK_NONE to allow discussion of medical symptoms like "bleeding"
 # This is appropriate for a medical agent but should be reviewed for your use case
@@ -1253,10 +1528,34 @@ except Exception as e:
 # MAIN PREGNANCY COMPANION AGENT
 # ============================================================================
 
+# ============================================================================
+# MEMORY AUTO-SAVE CALLBACK
+# ============================================================================
+
+# Callback for automatic memory saving after each agent turn
+async def auto_save_to_memory(callback_context):
+    """Automatically save session to memory after each agent turn."""
+    try:
+        await callback_context._invocation_context.memory_service.add_session_to_memory(
+            callback_context._invocation_context.session
+        )
+        logger.debug("💾 Session automatically saved to memory")
+    except Exception as e:
+        logger.error(f"Error auto-saving to memory: {e}")
+
+logger.info("✅ Memory auto-save callback created")
+
+# ============================================================================
+# AGENT TOOLS CONFIGURATION
+# ============================================================================
+
 # Build tools list conditionally based on MCP and OpenAPI availability
 # Wrap custom Python functions with FunctionTool for proper handling by gemini-2.5-flash-lite
 # Use GoogleSearchTool with bypass_multi_tools_limit=True to enable alongside FunctionTools
 agent_tools = [
+    preload_memory,  # ADK memory tool for cross-session recall
+    FunctionTool(func=get_pregnancy_by_phone),  # Patient record lookup by phone
+    FunctionTool(func=upsert_pregnancy_record),  # Create/update patient records
     FunctionTool(func=calculate_edd),
     FunctionTool(func=calculate_anc_schedule),
     FunctionTool(func=infer_country_from_location),
@@ -1291,6 +1590,7 @@ root_agent = LlmAgent(
     model=Gemini(model=MODEL_NAME, retry_options=retry_config),
     name="pregnancy_companion",
     description="Pregnancy care companion with location awareness, nutrition guidance, health facility information, and emergency contact search",
+    after_agent_callback=auto_save_to_memory,  # Auto-save to memory after each turn
     instruction="""
 You are the 'Pregnancy Companion', a specialized medical AI providing support for pregnant women in West Africa.
 
@@ -1302,10 +1602,15 @@ location-based assistance, and nutrition research.
 OPERATIONAL PROTOCOL:
 
 1. **Patient Identification & Profile**:
-   - Collect: Name, Age, LMP, Country, Location from the patient in conversation
+   - ALWAYS ask for phone number first - this is the unique patient identifier
+   - Use get_pregnancy_by_phone tool to check if patient already exists in the system
+   - If patient found: Greet them by name and reference their existing data (LMP, location, etc.)
+   - If patient not found: Collect Name, Age, Phone, LMP, Country, Location
    - If location/country is missing, ask politely: "Where are you located so I can provide local information?"
    - If country is not provided but location is given, use infer_country_from_location tool
-   - Maintain patient context throughout the conversation
+   - ALWAYS use upsert_pregnancy_record tool to save/update patient information
+   - Store patient data after collecting: phone, name, age, lmp_date, location, country
+   - Update records when new information is learned (e.g., risk level from nurse assessment)
    - Use simple language - avoid medical jargon, acronyms, and complex terms
 
 2. **Calculate EDD (Due Date)**:
@@ -1610,9 +1915,17 @@ async def get_or_create_user_session(
 # SERVICES INITIALIZATION - Session and Memory Management
 # ============================================================================
 
-# Initialize ADK services
-session_service = InMemorySessionService()
-memory_service = DatabaseMemoryService(db_path="pregnancy_agent_memory.db")
+# Initialize ADK services with persistent storage
+# Use DatabaseSessionService for session persistence across restarts
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+# Use aiosqlite driver for async support
+DB_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'pregnancy_agent_sessions.db'}"
+session_service = DatabaseSessionService(db_url=DB_URL)
+
+# Use DatabaseMemoryService for memory persistence
+memory_service = DatabaseMemoryService(db_path=str(DATA_DIR / "pregnancy_agent_memory.db"))
 
 # Import App for proper tool handling with gemini-2.5-flash-lite
 from google.adk.apps.app import App, ResumabilityConfig
