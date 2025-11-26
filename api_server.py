@@ -171,22 +171,32 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
     
     logs = []
     
-    # Try to read from actual log files
-    log_file = Path("data/agent.log")
+    # Try to read from actual log files (try multiple locations)
+    log_files = [
+        Path("api_server.log"),  # Primary location
+        Path("data/agent.log"),  # Alternative location
+    ]
     
-    if log_file.exists():
+    log_file = None
+    for lf in log_files:
+        if lf.exists():
+            log_file = lf
+            break
+    
+    if log_file:
         try:
             with open(log_file, 'r') as f:
                 lines = f.readlines()[-limit:]  # Get last N lines
                 for line in lines:
                     try:
-                        # Parse log line format: timestamp - level - message
-                        parts = line.strip().split(' - ', 2)
-                        if len(parts) >= 3:
+                        # Parse log line format: timestamp - logger_name - level - message
+                        parts = line.strip().split(' - ', 3)
+                        if len(parts) >= 4:
                             log_entry = {
                                 "timestamp": parts[0],
-                                "level": parts[1],
-                                "message": parts[2],
+                                "logger": parts[1],
+                                "level": parts[2],
+                                "message": parts[3],
                                 "trace_id": None,
                                 "span_id": None,
                                 "tool_name": None,
@@ -195,8 +205,22 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
                             }
                             
                             # Filter by level if specified
-                            if not level or level.upper() == "ALL" or parts[1] == level.upper():
+                            if not level or level.upper() == "ALL" or parts[2] == level.upper():
                                 logs.append(log_entry)
+                        elif len(parts) >= 2:
+                            # Fallback for lines that don't match standard format
+                            log_entry = {
+                                "timestamp": parts[0] if len(parts) > 0 else "",
+                                "logger": "",
+                                "level": "INFO",
+                                "message": ' - '.join(parts[1:]),
+                                "trace_id": None,
+                                "span_id": None,
+                                "tool_name": None,
+                                "tool_args": None,
+                                "tool_response": None
+                            }
+                            logs.append(log_entry)
                     except Exception:
                         continue
         except Exception as e:
