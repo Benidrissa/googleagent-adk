@@ -1115,8 +1115,9 @@ def _init_pregnancy_db():
     """Initialize the pregnancy records database schema."""
     conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
     cursor = conn.cursor()
-    
-    cursor.execute("""
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS pregnancy_records (
             phone TEXT PRIMARY KEY,
             name TEXT,
@@ -1130,16 +1131,21 @@ def _init_pregnancy_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    
-    cursor.execute("""
+    """
+    )
+
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_phone ON pregnancy_records(phone)
-    """)
-    
-    cursor.execute("""
+    """
+    )
+
+    cursor.execute(
+        """
         CREATE INDEX IF NOT EXISTS idx_country ON pregnancy_records(country)
-    """)
-    
+    """
+    )
+
     conn.commit()
     conn.close()
 
@@ -1152,13 +1158,13 @@ logger.info("✅ Pregnancy records database initialized")
 def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
     """
     Retrieves pregnancy record by phone number (unique identifier).
-    
+
     This tool allows the agent to check if a patient is already known
     and retrieve their complete pregnancy profile including medical history.
-    
+
     Args:
         phone: Phone number (unique patient identifier)
-    
+
     Returns:
         dict: Dictionary containing:
             - status: "success" or "not_found"
@@ -1166,27 +1172,27 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
             - message: Status message
     """
     if not phone or not phone.strip():
-        return {
-            "status": "error",
-            "error_message": "Phone number is required"
-        }
-    
+        return {"status": "error", "error_message": "Phone number is required"}
+
     phone = phone.strip()
-    
+
     try:
         conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
         cursor = conn.cursor()
-        
-        cursor.execute("""
+
+        cursor.execute(
+            """
             SELECT phone, name, age, lmp_date, edd, location, country, 
                    risk_level, medical_history, created_at, updated_at
             FROM pregnancy_records
             WHERE phone = ?
-        """, (phone,))
-        
+        """,
+            (phone,),
+        )
+
         row = cursor.fetchone()
         conn.close()
-        
+
         if row:
             record = {
                 "phone": row[0],
@@ -1199,29 +1205,26 @@ def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
                 "risk_level": row[7],
                 "medical_history": json.loads(row[8]) if row[8] else {},
                 "created_at": row[9],
-                "updated_at": row[10]
+                "updated_at": row[10],
             }
-            
+
             logger.info(f"📋 Retrieved pregnancy record for phone: {phone}")
-            
+
             return {
                 "status": "success",
                 "record": record,
-                "message": f"Found existing pregnancy record for {record['name']}"
+                "message": f"Found existing pregnancy record for {record['name']}",
             }
         else:
             logger.info(f"📋 No pregnancy record found for phone: {phone}")
             return {
                 "status": "not_found",
-                "message": f"No pregnancy record found for phone number {phone}. This appears to be a new patient."
+                "message": f"No pregnancy record found for phone number {phone}. This appears to be a new patient.",
             }
-            
+
     except Exception as e:
         logger.error(f"Error retrieving pregnancy record: {e}")
-        return {
-            "status": "error",
-            "error_message": f"Database error: {str(e)}"
-        }
+        return {"status": "error", "error_message": f"Database error: {str(e)}"}
 
 
 def upsert_pregnancy_record(
@@ -1233,15 +1236,15 @@ def upsert_pregnancy_record(
     location: Optional[str] = None,
     country: Optional[str] = None,
     risk_level: Optional[str] = None,
-    medical_history: Optional[Dict[str, Any]] = None
+    medical_history: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Creates or updates a pregnancy record.
-    
+
     This tool allows the agent to persist patient information across sessions.
     Use phone number as the unique identifier. All other fields are optional
     and will only update if provided.
-    
+
     Args:
         phone: Phone number (unique identifier, required)
         name: Patient's name
@@ -1252,7 +1255,7 @@ def upsert_pregnancy_record(
         country: Country
         risk_level: Risk classification (low/moderate/high)
         medical_history: Dictionary with medical history data
-    
+
     Returns:
         dict: Dictionary containing:
             - status: "success" or "error"
@@ -1263,25 +1266,25 @@ def upsert_pregnancy_record(
     if not phone or not phone.strip():
         return {
             "status": "error",
-            "error_message": "Phone number is required for creating/updating records"
+            "error_message": "Phone number is required for creating/updating records",
         }
-    
+
     phone = phone.strip()
-    
+
     try:
         conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
         cursor = conn.cursor()
-        
+
         # Check if record exists
         cursor.execute("SELECT phone FROM pregnancy_records WHERE phone = ?", (phone,))
         existing = cursor.fetchone()
         action = "updated" if existing else "created"
-        
+
         if existing:
             # Build UPDATE query with only provided fields
             update_fields = []
             update_values = []
-            
+
             if name is not None:
                 update_fields.append("name = ?")
                 update_values.append(name)
@@ -1306,44 +1309,50 @@ def upsert_pregnancy_record(
             if medical_history is not None:
                 update_fields.append("medical_history = ?")
                 update_values.append(json.dumps(medical_history))
-            
+
             update_fields.append("updated_at = CURRENT_TIMESTAMP")
             update_values.append(phone)  # For WHERE clause
-            
+
             if update_fields:
                 query = f"UPDATE pregnancy_records SET {', '.join(update_fields)} WHERE phone = ?"
                 cursor.execute(query, update_values)
         else:
             # INSERT new record
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO pregnancy_records 
                 (phone, name, age, lmp_date, edd, location, country, risk_level, medical_history)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                phone,
-                name,
-                age,
-                lmp_date,
-                edd,
-                location,
-                country,
-                risk_level,
-                json.dumps(medical_history) if medical_history else json.dumps({})
-            ))
-        
+            """,
+                (
+                    phone,
+                    name,
+                    age,
+                    lmp_date,
+                    edd,
+                    location,
+                    country,
+                    risk_level,
+                    json.dumps(medical_history) if medical_history else json.dumps({}),
+                ),
+            )
+
         conn.commit()
-        
+
         # Retrieve the final record
-        cursor.execute("""
+        cursor.execute(
+            """
             SELECT phone, name, age, lmp_date, edd, location, country, 
                    risk_level, medical_history, created_at, updated_at
             FROM pregnancy_records
             WHERE phone = ?
-        """, (phone,))
-        
+        """,
+            (phone,),
+        )
+
         row = cursor.fetchone()
         conn.close()
-        
+
         record = {
             "phone": row[0],
             "name": row[1],
@@ -1355,24 +1364,21 @@ def upsert_pregnancy_record(
             "risk_level": row[7],
             "medical_history": json.loads(row[8]) if row[8] else {},
             "created_at": row[9],
-            "updated_at": row[10]
+            "updated_at": row[10],
         }
-        
+
         logger.info(f"💾 {action.capitalize()} pregnancy record for {name or phone}")
-        
+
         return {
             "status": "success",
             "action": action,
             "record": record,
-            "message": f"Successfully {action} pregnancy record for {name or phone}"
+            "message": f"Successfully {action} pregnancy record for {name or phone}",
         }
-        
+
     except Exception as e:
         logger.error(f"Error upserting pregnancy record: {e}")
-        return {
-            "status": "error",
-            "error_message": f"Database error: {str(e)}"
-        }
+        return {"status": "error", "error_message": f"Database error: {str(e)}"}
 
 
 # --- SAFETY SETTINGS (Critical for Medical Applications) ---
@@ -1532,6 +1538,7 @@ except Exception as e:
 # MEMORY AUTO-SAVE CALLBACK
 # ============================================================================
 
+
 # Callback for automatic memory saving after each agent turn
 async def auto_save_to_memory(callback_context):
     """Automatically save session to memory after each agent turn."""
@@ -1542,6 +1549,7 @@ async def auto_save_to_memory(callback_context):
         logger.debug("💾 Session automatically saved to memory")
     except Exception as e:
         logger.error(f"Error auto-saving to memory: {e}")
+
 
 logger.info("✅ Memory auto-save callback created")
 
@@ -1925,7 +1933,9 @@ DB_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'pregnancy_agent_sessions.db'}"
 session_service = DatabaseSessionService(db_url=DB_URL)
 
 # Use DatabaseMemoryService for memory persistence
-memory_service = DatabaseMemoryService(db_path=str(DATA_DIR / "pregnancy_agent_memory.db"))
+memory_service = DatabaseMemoryService(
+    db_path=str(DATA_DIR / "pregnancy_agent_memory.db")
+)
 
 # Import App for proper tool handling with gemini-2.5-flash-lite
 from google.adk.apps.app import App, ResumabilityConfig

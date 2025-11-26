@@ -133,6 +133,7 @@ def test_session_persistence():
 
     # Wait for session to be saved
     import time
+
     time.sleep(1)
 
     # Second message - reference previous context without repeating
@@ -281,7 +282,7 @@ def test_phone_based_lookup():
     print_section("TEST 7: Phone-Based Patient Lookup")
 
     # Generate unique phone number for this test
-    timestamp = datetime.now().strftime('%M%S')
+    timestamp = datetime.now().strftime("%M%S")
     test_phone = f"+223 70 {timestamp[:2]} {timestamp[2:]} 99"
 
     # First interaction with phone number
