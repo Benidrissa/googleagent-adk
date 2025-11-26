@@ -250,6 +250,67 @@ async def get_logs(level: Optional[str] = None, limit: int = 100):
     return {"logs": logs, "total": len(logs)}
 
 
+@app.post("/evaluation/run", tags=["Evaluation"])
+async def run_evaluation(background_tasks: BackgroundTasks):
+    """
+    Trigger a live evaluation run on the test suite.
+    Runs asynchronously in the background.
+
+    Returns:
+        Status message indicating evaluation has been triggered
+    """
+    import subprocess
+    from pathlib import Path
+
+    try:
+        eval_set_path = Path("tests/pregnancy_agent_integration.evalset.json")
+        config_path = Path("tests/evaluation_config.json")
+
+        if not eval_set_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evaluation set not found: {eval_set_path}"
+            )
+
+        # Run evaluation in background
+        def run_eval_task():
+            try:
+                logger.info("Starting live evaluation run...")
+                result = subprocess.run(
+                    [
+                        "adk", "eval", "agent_eval",
+                        str(eval_set_path),
+                        "--config_file_path", str(config_path)
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=120  # 2 minute timeout
+                )
+                if result.returncode == 0:
+                    logger.info(f"Evaluation completed successfully: {result.stdout}")
+                else:
+                    logger.error(f"Evaluation failed: {result.stderr}")
+            except Exception as e:
+                logger.error(f"Error running evaluation: {e}")
+
+        background_tasks.add_task(run_eval_task)
+
+        return {
+            "status": "triggered",
+            "message": "Live evaluation started. Results will be available shortly.",
+            "timestamp": datetime.datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering evaluation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trigger evaluation: {str(e)}"
+        )
+
+
 @app.get("/evaluation/results", tags=["Evaluation"])
 async def get_evaluation_results():
     """

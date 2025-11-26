@@ -37,9 +37,13 @@ export default function EvaluationPage() {
       const results = response.data.results || []
       setEvalResults(results)
       
-      // Auto-expand first result if available
-      if (results.length > 0) {
+      // Auto-expand first result if available (latest evaluation)
+      if (results.length > 0 && expandedRunId === null) {
         setExpandedRunId(0)
+        // Also expand the first case in the latest result
+        if (results[0].eval_cases.length > 0) {
+          setExpandedCaseId(results[0].eval_cases[0].eval_id)
+        }
       }
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to fetch evaluation results')
@@ -52,6 +56,13 @@ export default function EvaluationPage() {
 
   useEffect(() => {
     fetchEvaluationResults()
+    
+    // Auto-refresh every 10 seconds to show latest data
+    const interval = setInterval(() => {
+      fetchEvaluationResults()
+    }, 10000)
+    
+    return () => clearInterval(interval)
   }, [])
 
   const toggleRun = (idx: number) => {

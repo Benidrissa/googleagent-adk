@@ -57,6 +57,8 @@ export default function ChatPage() {
   const [sessionId, setSessionId] = useState<string>(persistedState.sessionId)
   const [userId, setUserId] = useState(persistedState.userId)
   const [error, setError] = useState<string>('')
+  const [evaluating, setEvaluating] = useState(false)
+  const [evalSuccess, setEvalSuccess] = useState<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -166,6 +168,45 @@ export default function ChatPage() {
     }
   }
 
+  const runLiveEvaluation = async () => {
+    if (messages.length <= 1) {
+      setError('No conversation to evaluate. Send at least one message first.')
+      return
+    }
+
+    setEvaluating(true)
+    setError('')
+    setEvalSuccess('')
+
+    try {
+      const response = await axios.post(`${API_URL}/evaluation/run`, {
+        session_id: sessionId,
+        user_id: userId
+      })
+      
+      setEvalSuccess(`✅ Evaluation completed! Check the Evaluation page for results.`)
+      
+      const evalMessage: Message = {
+        role: 'system',
+        content: `📊 Live Evaluation Completed\n${response.data.message || 'Results available on Evaluation page'}`,
+        timestamp: new Date().toISOString()
+      }
+      setMessages(prev => [...prev, evalMessage])
+    } catch (err: any) {
+      const errorMsg = err.response?.data?.detail || err.message || 'Evaluation failed'
+      setError('Evaluation failed: ' + errorMsg)
+      
+      const evalMessage: Message = {
+        role: 'system',
+        content: `❌ Evaluation Failed: ${errorMsg}`,
+        timestamp: new Date().toISOString()
+      }
+      setMessages(prev => [...prev, evalMessage])
+    } finally {
+      setEvaluating(false)
+    }
+  }
+
   return (
     <div className="page-content">
       <div className="chat-container">
@@ -179,6 +220,14 @@ export default function ChatPage() {
             <button onClick={checkHealth} className="btn-secondary">
               Check Health
             </button>
+            <button 
+              onClick={runLiveEvaluation} 
+              disabled={evaluating || messages.length <= 1}
+              className="btn-secondary"
+              style={{ backgroundColor: evaluating ? '#ccc' : '#667eea', color: '#fff' }}
+            >
+              {evaluating ? '⏳ Evaluating...' : '📊 Run Live Evaluation'}
+            </button>
             <button onClick={clearChat} className="btn-secondary">
               Clear Chat
             </button>
@@ -188,6 +237,12 @@ export default function ChatPage() {
         {error && (
           <div className="error-banner">
             ⚠️ {error}
+          </div>
+        )}
+
+        {evalSuccess && (
+          <div className="error-banner" style={{ background: '#d4edda', borderColor: '#c3e6cb', color: '#155724' }}>
+            {evalSuccess}
           </div>
         )}
 
