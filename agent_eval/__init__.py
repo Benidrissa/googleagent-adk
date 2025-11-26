@@ -1,0 +1,2175 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Pregnancy Companion Agent - Google ADK Compliant Implementation
+
+A comprehensive pregnancy care agent built with Google Agent Development Kit (ADK).
+Features:
+- Patient memory management and context retention
+- EDD calculation tool
+- Nurse agent consultation for risk assessment (Agent-as-a-Tool)
+- Safety-first medical guidance
+- Comprehensive logging and observability
+"""
+
+import os
+import logging
+import datetime
+import json
+import requests
+import asyncio
+import sqlite3
+import pickle
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Union
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    logger_dotenv = logging.getLogger(__name__)
+    logger_dotenv.info("✅ Environment variables loaded from .env file")
+except ImportError:
+    # dotenv not installed, environment variables will be loaded from system only
+    pass
+
+from google.adk.agents import LlmAgent
+from google.adk.models.google_llm import Gemini
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService, DatabaseSessionService
+from google.adk.memory import InMemoryMemoryService
+from google.adk.tools import AgentTool, load_memory, preload_memory
+from google.adk.tools.google_search_tool import GoogleSearchTool
+from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.tool_context import ToolContext
+from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.openapi_tool import OpenAPIToolset
+from google.adk.plugins.logging_plugin import LoggingPlugin
+from google.genai import types
+from google.genai.types import HarmCategory, HarmBlockThreshold
+from mcp.client.stdio import StdioServerParameters, stdio_client
+
+# --- CONFIGURATION ---
+# Set up logging (ADK best practice)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# OpenTelemetry for advanced observability (optional enhancement)
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
+
+    # Initialize tracer
+    trace.set_tracer_provider(TracerProvider())
+    trace.get_tracer_provider().add_span_processor(
+        SimpleSpanProcessor(ConsoleSpanExporter())
+    )
+    tracer = trace.get_tracer(__name__)
+    TRACING_ENABLED = True
+    logger.info("✅ OpenTelemetry tracing enabled")
+except ImportError:
+    TRACING_ENABLED = False
+    tracer = None
+    logger.info("ℹ️  OpenTelemetry not available, running without tracing")
+
+# Get API keys from environment
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "YOUR_API_KEY_HERE")
+if GOOGLE_API_KEY == "YOUR_API_KEY_HERE":
+    logger.warning(
+        "⚠️  GOOGLE_API_KEY not set. Please set it in your environment or .env file"
+    )
+else:
+    # Set the environment variable as required by google-genai SDK
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "FALSE"
+    logger.info("✅ Google API configured for direct Gemini API access")
+
+# Google Maps API removed - using Google Search tool for facility search instead
+
+
+# Helper function to check if we should use simulation mode
+def _is_api_key_placeholder(api_key: str) -> bool:
+    """Check if the API key is a placeholder value."""
+    if not api_key:
+        return True
+    placeholder_values = [
+        "your_google_maps_api_key_here",
+        "YOUR_API_KEY_HERE",
+        "your_api_key_here",
+        "INSERT_API_KEY_HERE",
+        "REPLACE_WITH_YOUR_KEY",
+    ]
+    return api_key in placeholder_values or len(api_key) < 20
+
+
+# Configure retry options for LLM calls
+retry_config = types.HttpRetryOptions(
+    attempts=5,
+    exp_base=7,
+    initial_delay=1,
+    http_status_codes=[429, 500, 503, 504],
+)
+
+# Model configuration
+# IMPORTANT: Always use gemini-2.5-flash-lite - DO NOT CHANGE
+# This model works with google_search tool transparently via ADK
+# Custom Python function tools work with this model when properly configured
+MODEL_NAME = "gemini-2.5-flash-lite"
+
+# Session state keys for pause/resume functionality
+STATE_PAUSED = "consultation_paused"
+STATE_PAUSE_REASON = "pause_reason"
+STATE_PAUSE_TIMESTAMP = "pause_timestamp"
+STATE_LAST_TOPIC = "last_discussed_topic"
+STATE_PENDING_ACTIONS = "pending_actions"
+
+# MCP Health Facility Cache (simulated local database)
+# --- APPLICATION CONSTANTS ---
+APP_NAME = "pregnancy_companion"
+DEFAULT_USER_ID = "patient_user"
+
+logger.info("✅ Pregnancy Companion Agent initialized")
+
+# ============================================================================
+# DATABASE-BACKED MEMORY SERVICE
+# ============================================================================
+
+
+class DatabaseMemoryService(InMemoryMemoryService):
+    """
+    Persistent memory service using SQLite database with per-patient isolation.
+    Extends InMemoryMemoryService and adds database persistence.
+
+    Stores sessions in database for persistence across restarts.
+    PRIVACY: Each patient (user_id/phone) has isolated conversation history.
+    """
+
+    def __init__(self, db_path: str = "pregnancy_agent_memory.db"):
+        """Initialize database-backed memory service with patient isolation."""
+        super().__init__()  # Initialize parent InMemoryMemoryService
+        self.db_path = Path(db_path)
+        self._session_cache = (
+            {}
+        )  # Cache sessions: {(app_name, user_id, session_id): Session}
+        self._init_database()
+        # Do NOT load all sessions - load only when requested by specific user
+        logger.info(
+            f"✅ Database Memory Service initialized with PATIENT ISOLATION: {self.db_path.absolute()}"
+        )
+
+    def _init_database(self):
+        """Create database schema if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_name TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                session_data BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(app_name, user_id, session_id)
+            )
+        """
+        )
+
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_sessions 
+            ON sessions(app_name, user_id)
+        """
+        )
+
+        conn.commit()
+        conn.close()
+
+    def _load_user_sessions_from_database(self, app_name: str, user_id: str):
+        """Load sessions for a specific user only (patient isolation)."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        count = 0
+        try:
+            cursor.execute(
+                "SELECT session_id, session_data FROM sessions WHERE app_name = ? AND user_id = ?",
+                (app_name, user_id),
+            )
+            for row in cursor.fetchall():
+                session_id, session_data = row
+                try:
+                    session = pickle.loads(session_data)
+                    # Cache locally
+                    key = (app_name, user_id, session_id)
+                    self._session_cache[key] = session
+                    count += 1
+                except Exception as e:
+                    logger.error(f"Error loading session from database: {e}")
+
+            if count > 0:
+                logger.info(f"📚 Loaded {count} sessions for user {user_id} (ISOLATED)")
+        except Exception as e:
+            logger.error(f"Error reading user sessions from database: {e}")
+        finally:
+            conn.close()
+
+    async def _restore_user_cached_sessions(self, app_name: str, user_id: str):
+        """Restore cached sessions for a specific user only."""
+        for key, session in self._session_cache.items():
+            if key[0] == app_name and key[1] == user_id:
+                try:
+                    await super().add_session_to_memory(session)
+                except Exception as e:
+                    logger.error(f"Error restoring session {key}: {e}")
+
+    async def add_session_to_memory(self, session):
+        """Add session to memory and persist to database."""
+        # First, use parent's in-memory storage
+        await super().add_session_to_memory(session)
+
+        # Cache locally
+        key = (session.app_name, session.user_id, session.id)
+        self._session_cache[key] = session
+
+        # Then persist to database
+        self._persist_session(session)
+
+    def _persist_session(self, session):
+        """Persist session to database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Pickle the entire session object
+            session_data = pickle.dumps(session)
+
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO sessions 
+                (app_name, user_id, session_id, session_data, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+                (session.app_name, session.user_id, session.id, session_data),
+            )
+
+            conn.commit()
+            logger.debug(
+                f"💾 Persisted session to database: {session.user_id}/{session.id}"
+            )
+        except Exception as e:
+            logger.error(f"Error persisting session to database: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def clear_user_memory(self, app_name: str, user_id: str):
+        """Clear memory for a specific user only (maintains other patients' privacy)."""
+        # Clear from cache
+        keys_to_delete = [
+            k
+            for k in self._session_cache.keys()
+            if k[0] == app_name and k[1] == user_id
+        ]
+        for key in keys_to_delete:
+            del self._session_cache[key]
+
+        # Clear from database
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "DELETE FROM sessions WHERE app_name = ? AND user_id = ?",
+                (app_name, user_id),
+            )
+            deleted_count = cursor.rowcount
+            conn.commit()
+            logger.info(
+                f"🗑️  [ISOLATED] Cleared {deleted_count} sessions for user {user_id} only"
+            )
+        finally:
+            conn.close()
+
+    async def search_memory(self, app_name: str, user_id: str, query: str):
+        """
+        Search stored sessions for relevant memories - ONLY THIS USER'S SESSIONS.
+        PRIVACY: Never returns memories from other patients.
+
+        Implements keyword-based search across THIS user's sessions only.
+        Extracts text from session events and matches against query keywords.
+
+        Args:
+            app_name: Application name
+            user_id: User identifier (phone number - unique patient ID)
+            query: Search query string
+
+        Returns:
+            SearchMemoryResponse with matching memories from THIS patient ONLY
+        """
+        from google.adk.memory.base_memory_service import SearchMemoryResponse
+        from google.adk.memory.memory_entry import MemoryEntry
+        from google.genai.types import Content, Part
+
+        # Ensure user sessions are loaded
+        if not any(key[1] == user_id for key in self._session_cache.keys()):
+            self._load_user_sessions_from_database(app_name, user_id)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        matching_memories = []
+        query_lower = query.lower()
+        query_keywords = set(query_lower.split())
+
+        try:
+            # CRITICAL: Only retrieve sessions for THIS specific user
+            cursor.execute(
+                "SELECT session_id, session_data FROM sessions WHERE app_name = ? AND user_id = ?",
+                (app_name, user_id),
+            )
+
+            sessions_checked = 0
+            for row in cursor.fetchall():
+                session_id, session_data = row
+                sessions_checked += 1
+                try:
+                    session = pickle.loads(session_data)
+
+                    # Extract text from session events
+                    for event in session.events:
+                        if event.content and event.content.parts:
+                            for part in event.content.parts:
+                                if hasattr(part, "text") and part.text:
+                                    text_lower = part.text.lower()
+
+                                    # Check if any query keywords match
+                                    if any(
+                                        keyword in text_lower
+                                        for keyword in query_keywords
+                                    ):
+                                        # Create a memory entry for this event
+                                        memory_content = Content(
+                                            role=event.content.role,
+                                            parts=[Part(text=part.text)],
+                                        )
+
+                                        # Create proper ADK MemoryEntry
+                                        memory = MemoryEntry(
+                                            content=memory_content,
+                                            author=event.content.role,
+                                        )
+                                        matching_memories.append(memory)
+                                        break  # Only add one memory per event
+
+                except Exception as e:
+                    logger.error(f"Error processing session {session_id}: {e}")
+
+            logger.info(
+                f"🔍 [ISOLATED] Found {len(matching_memories)} memories for user {user_id} from {sessions_checked} sessions (query: '{query}')"
+            )
+
+        except Exception as e:
+            logger.error(f"Error searching memories: {e}")
+        finally:
+            conn.close()
+
+        # Return SearchMemoryResponse
+        return SearchMemoryResponse(memories=matching_memories)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get database statistics."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("SELECT COUNT(*) FROM sessions")
+            total = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(DISTINCT user_id) FROM sessions")
+            users = cursor.fetchone()[0]
+
+            return {
+                "total_sessions": total,
+                "unique_users": users,
+                "cached_sessions": len(self._session_cache),
+                "database_path": str(self.db_path.absolute()),
+                "database_size_kb": (
+                    self.db_path.stat().st_size / 1024 if self.db_path.exists() else 0
+                ),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+
+# ============================================================================
+# TOOLS SECTION - ADK Function Tools
+# ============================================================================
+
+
+def get_local_health_facilities_DEPRECATED(
+    city: str, facility_type: str = "all"
+) -> Dict[str, Any]:
+    """
+    DEPRECATED: This function returned hardcoded test data.
+
+    Agent should now use google_search tool to find real, current facility information:
+    - google_search("hospitals in [city] [country]")
+    - google_search("maternity clinics [location]")
+    - google_search("[facility_type] near [location] with contact number")
+
+    This provides:
+    - Real, up-to-date facility information
+    - Current phone numbers and addresses
+    - Operating hours and services
+    - Patient reviews and ratings
+    """
+    return {
+        "status": "deprecated",
+        "error_message": (
+            f"This function is deprecated. Please use google_search tool instead to find "
+            f"real facilities in {city}. Example: google_search('hospitals in {city}')"
+        ),
+    }
+
+
+def calculate_edd(lmp_date: str) -> Dict[str, Any]:
+    """
+    Calculates Estimated Due Date (EDD) based on Last Menstrual Period (LMP).
+
+    This tool uses Naegele's rule to calculate the expected delivery date
+    by adding 280 days (40 weeks) to the LMP date.
+
+    Args:
+        lmp_date: Last Menstrual Period date in YYYY-MM-DD format (e.g., "2025-05-01")
+
+    Returns:
+        dict: Dictionary containing:
+            - edd: Estimated due date in YYYY-MM-DD format
+            - gestational_weeks: Current gestational age in weeks
+            - weeks_remaining: Weeks until due date
+            - status: "success" or "error"
+            - error_message: Error description if status is "error"
+    """
+    try:
+        lmp = datetime.datetime.strptime(lmp_date, "%Y-%m-%d")
+        edd = lmp + datetime.timedelta(days=280)
+        gestational_weeks = int((datetime.datetime.now() - lmp).days / 7)
+        weeks_remaining = max(0, 40 - gestational_weeks)
+
+        logger.info(
+            f"EDD calculated: {edd.strftime('%Y-%m-%d')} (LMP: {lmp_date}, {gestational_weeks} weeks)"
+        )
+
+        return {
+            "status": "success",
+            "edd": edd.strftime("%Y-%m-%d"),
+            "gestational_weeks": gestational_weeks,
+            "weeks_remaining": weeks_remaining,
+        }
+    except ValueError as e:
+        logger.error(f"Invalid date format for LMP: {lmp_date}")
+        return {
+            "status": "error",
+            "error_message": f"Invalid date format. Please use YYYY-MM-DD format (e.g., 2025-05-01)",
+        }
+    except Exception as e:
+        logger.error(f"Error calculating EDD: {e}")
+        return {"status": "error", "error_message": f"Error calculating EDD: {str(e)}"}
+
+
+def calculate_anc_schedule(lmp_date: str) -> Dict[str, Any]:
+    """
+    Calculates the complete ANC (Antenatal Care) visit schedule based on WHO guidelines.
+
+    WHO recommends a minimum of 8 ANC contacts during pregnancy:
+    - First visit: 8-12 weeks (we use 10 weeks as midpoint)
+    - Second visit: 20 weeks
+    - Third visit: 26 weeks
+    - Fourth visit: 30 weeks
+    - Fifth visit: 34 weeks
+    - Sixth visit: 36 weeks
+    - Seventh visit: 38 weeks
+    - Eighth visit: 40 weeks (at EDD)
+
+    Args:
+        lmp_date: Last Menstrual Period date in YYYY-MM-DD format (e.g., "2025-03-01")
+
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - anc_schedule: List of ANC visits with dates and status
+            - next_visit: Next upcoming visit information (within 14 days)
+            - overdue_visits: List of overdue visits (more than 7 days past)
+            - completed_visits: Count of completed visits
+            - error_message: Error description if status is "error"
+    """
+    try:
+        lmp = datetime.datetime.strptime(lmp_date, "%Y-%m-%d")
+        current_date = datetime.datetime.now()
+
+        # WHO ANC visit schedule (in weeks from LMP)
+        anc_weeks = [10, 20, 26, 30, 34, 36, 38, 40]
+
+        schedule = []
+        next_visit = None
+        overdue_visits = []
+        completed_count = 0
+
+        for visit_num, week in enumerate(anc_weeks, start=1):
+            visit_date = lmp + datetime.timedelta(weeks=week)
+            days_until_visit = (visit_date - current_date).days
+
+            # Determine visit status
+            if days_until_visit < -7:  # More than 7 days past
+                status = "overdue"
+                overdue_visits.append(
+                    {
+                        "visit_number": visit_num,
+                        "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                        "week": week,
+                        "days_overdue": abs(days_until_visit),
+                    }
+                )
+            elif days_until_visit < 0:  # Within 7 days past
+                status = "due_now"
+            elif days_until_visit <= 14:  # Within next 14 days (2 weeks)
+                status = "upcoming"
+                if next_visit is None:
+                    next_visit = {
+                        "visit_number": visit_num,
+                        "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                        "week": week,
+                        "days_until": days_until_visit,
+                    }
+            else:
+                status = "scheduled"
+
+            schedule.append(
+                {
+                    "visit_number": visit_num,
+                    "week": week,
+                    "scheduled_date": visit_date.strftime("%Y-%m-%d"),
+                    "status": status,
+                    "days_until": days_until_visit,
+                }
+            )
+
+        # Calculate gestational age
+        gestational_weeks = int((current_date - lmp).days / 7)
+
+        logger.info(
+            f"ANC schedule calculated: {len(schedule)} visits, {len(overdue_visits)} overdue"
+        )
+
+        return {
+            "status": "success",
+            "anc_schedule": schedule,
+            "next_visit": next_visit,
+            "overdue_visits": overdue_visits,
+            "completed_visits": completed_count,
+            "total_visits": len(schedule),
+            "current_gestational_age": f"{gestational_weeks} weeks",
+            "lmp_date": lmp_date,
+        }
+
+    except ValueError as e:
+        logger.error(f"Invalid date format for LMP: {lmp_date}")
+        return {
+            "status": "error",
+            "error_message": f"Invalid date format. Please use YYYY-MM-DD format (e.g., 2025-03-01)",
+        }
+    except Exception as e:
+        logger.error(f"Error calculating ANC schedule: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error calculating ANC schedule: {str(e)}",
+        }
+
+
+def infer_country_from_location(location: str) -> Dict[str, Any]:
+    """
+    Infers the country from a location string using simple pattern matching.
+    Note: For more accurate results, the agent should use google_search tool.
+
+    Args:
+        location: Location string (city, region, address, etc.)
+
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - country: Inferred country name
+            - formatted_location: Full formatted address
+            - error_message: Error description if status is "error"
+    """
+    if not location or not location.strip():
+        return {"status": "error", "error_message": "Location cannot be empty"}
+
+    location_lower = location.lower()
+
+    # Simple pattern matching for West African cities
+    city_country_map = {
+        # Nigeria
+        "lagos": ("Nigeria", "Lagos, Nigeria"),
+        "abuja": ("Nigeria", "Abuja, Nigeria"),
+        "port harcourt": ("Nigeria", "Port Harcourt, Nigeria"),
+        "kano": ("Nigeria", "Kano, Nigeria"),
+        "ibadan": ("Nigeria", "Ibadan, Nigeria"),
+        # Mali
+        "bamako": ("Mali", "Bamako, Mali"),
+        "sikasso": ("Mali", "Sikasso, Mali"),
+        "mopti": ("Mali", "Mopti, Mali"),
+        # Ghana
+        "accra": ("Ghana", "Accra, Ghana"),
+        "kumasi": ("Ghana", "Kumasi, Ghana"),
+        "tamale": ("Ghana", "Tamale, Ghana"),
+        # Burkina Faso
+        "ouagadougou": ("Burkina Faso", "Ouagadougou, Burkina Faso"),
+        "bobo-dioulasso": ("Burkina Faso", "Bobo-Dioulasso, Burkina Faso"),
+        # Senegal
+        "dakar": ("Senegal", "Dakar, Senegal"),
+        "thies": ("Senegal", "Thiès, Senegal"),
+        # Ivory Coast
+        "abidjan": ("Ivory Coast", "Abidjan, Ivory Coast"),
+        "yamoussoukro": ("Ivory Coast", "Yamoussoukro, Ivory Coast"),
+    }
+
+    for city, (country, formatted) in city_country_map.items():
+        if city in location_lower:
+            logger.info(f"Inferred country '{country}' from location '{location}'")
+            return {
+                "status": "success",
+                "country": country,
+                "formatted_location": formatted,
+            }
+
+    # If no match, suggest agent use google_search for more info
+    logger.warning(f"Could not infer country from location: {location}")
+    return {
+        "status": "error",
+        "error_message": f"Could not determine country from location: {location}. Agent should use google_search tool for more information.",
+    }
+
+
+def find_nearby_health_facilities_DEPRECATED(
+    location: str, radius_meters: int = 5000
+) -> Dict[str, Any]:
+    """
+    DEPRECATED: This function used Google Maps Places API.
+    Agent should now use google_search tool instead to find nearby health facilities.
+    Example: google_search("hospitals near [location]") or google_search("maternity clinics in [city]")
+
+    Args:
+        location: Location string (city, address, coordinates)
+        radius_meters: Search radius in meters (default: 5000 = 5km)
+
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - facilities: List of nearby health facilities with details
+            - count: Number of facilities found
+            - error_message: Error description if status is "error"
+    """
+    # DEPRECATED - Return error message
+    return {
+        "status": "deprecated",
+        "error_message": "This function is deprecated. Use google_search tool instead for travel information.",
+    }
+
+    # OLD CODE BELOW - KEPT FOR REFERENCE ONLY
+    if False:  # Never execute
+        location_lower = location.lower()
+
+        # No simulated data - return deprecated message
+        return {
+            "status": "deprecated",
+            "error_message": f"This function no longer provides facility data. Use google_search('hospitals near {location}') instead.",
+        }
+
+    try:
+        # First, geocode the location to get coordinates
+        geocode_url = "https://maps.googleapis.com/maps/api/geocode/json"
+        geocode_params = {"address": location, "key": GOOGLE_MAPS_API_KEY}
+
+        geocode_response = requests.get(geocode_url, params=geocode_params, timeout=10)
+        geocode_response.raise_for_status()
+        geocode_data = geocode_response.json()
+
+        if geocode_data["status"] != "OK" or not geocode_data["results"]:
+            return {
+                "status": "error",
+                "error_message": f"Could not find location: {location}",
+            }
+
+        lat_lng = geocode_data["results"][0]["geometry"]["location"]
+        location_str = f"{lat_lng['lat']},{lat_lng['lng']}"
+
+        # Search for health facilities
+        places_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+        places_params = {
+            "location": location_str,
+            "radius": radius_meters,
+            "type": "hospital",  # Also matches clinics and health centers
+            "key": GOOGLE_MAPS_API_KEY,
+        }
+
+        places_response = requests.get(places_url, params=places_params, timeout=10)
+        places_response.raise_for_status()
+        places_data = places_response.json()
+
+        if places_data["status"] != "OK" and places_data["status"] != "ZERO_RESULTS":
+            return {
+                "status": "error",
+                "error_message": f"Places API error: {places_data.get('status')}",
+            }
+
+        facilities = []
+        for place in places_data.get("results", [])[:10]:  # Limit to top 10
+            facility = {
+                "name": place.get("name"),
+                "address": place.get("vicinity"),
+                "rating": place.get("rating"),
+                "open_now": place.get("opening_hours", {}).get("open_now"),
+                "types": place.get("types", []),
+            }
+            facilities.append(facility)
+
+        logger.info(f"Found {len(facilities)} health facilities near {location}")
+
+        return {
+            "status": "success",
+            "facilities": facilities,
+            "count": len(facilities),
+            "search_location": location,
+            "search_radius_km": radius_meters / 1000,
+        }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Places API error: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error contacting Places API: {str(e)}",
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error finding facilities: {e}")
+        return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
+
+
+def assess_road_accessibility_DEPRECATED(
+    location: str, destination: str = None
+) -> Dict[str, Any]:
+    """
+    DEPRECATED: This function used Google Maps Directions API.
+    Agent should now use google_search tool instead.
+    Example: google_search("distance from [location] to [destination]")
+
+    For travel planning, agent can search for:
+    - "how to get to [hospital] from [location]"
+    - "transport options [city]"
+    - "ambulance services [location]"
+    """
+    return {
+        "status": "deprecated",
+        "error_message": "This function is deprecated. Use google_search tool instead for travel information.",
+    }
+
+
+def assess_road_accessibility_DEPRECATED_OLD(
+    location: str, destination: str = None
+) -> Dict[str, Any]:
+    # OLD IMPLEMENTATION - KEPT FOR REFERENCE
+    if False:  # Never execute
+        location_lower = location.lower()
+
+        simulated_routes = {
+            "lagos": {
+                "distance": "2.3 km",
+                "duration": "15 mins",
+                "start_address": location,
+                "end_address": "Lagos University Teaching Hospital, Idi-Araba, Lagos",
+                "traffic_note": "Moderate traffic during peak hours",
+            },
+            "bamako": {
+                "distance": "1.8 km",
+                "duration": "10 mins",
+                "start_address": location,
+                "end_address": "Hospital Gabriel Touré, Commune III, Bamako",
+                "traffic_note": "Generally good road conditions",
+            },
+            "accra": {
+                "distance": "1.5 km",
+                "duration": "8 mins",
+                "start_address": location,
+                "end_address": "Ridge Hospital, Ridge, Accra",
+                "traffic_note": "Excellent road access",
+            },
+        }
+
+        for city, route_info in simulated_routes.items():
+            if city in location_lower:
+                logger.info(f"[SIMULATION] Assessed route from {location}")
+                return {
+                    "status": "success",
+                    "route_available": True,
+                    "travel_mode": "driving",
+                    "simulation": True,
+                    **route_info,
+                }
+
+        # Default for unknown locations
+        logger.warning(f"[SIMULATION] No route data for location: {location}")
+        return {
+            "status": "success",
+            "distance": "Unknown",
+            "duration": "Unknown",
+            "route_available": False,
+            "travel_mode": "driving",
+            "start_address": location,
+            "end_address": "Nearest health facility",
+            "simulation": True,
+        }
+
+    try:
+        # If no destination, find nearest hospital first
+        if not destination:
+            facilities_result = find_nearby_health_facilities(
+                location, radius_meters=10000
+            )
+            if (
+                facilities_result["status"] == "success"
+                and facilities_result["count"] > 0
+            ):
+                destination = facilities_result["facilities"][0]["address"]
+            else:
+                return {
+                    "status": "error",
+                    "error_message": "No health facilities found nearby for route planning",
+                }
+
+        # Use Google Maps Directions API
+        directions_url = "https://maps.googleapis.com/maps/api/directions/json"
+        params = {
+            "origin": location,
+            "destination": destination,
+            "mode": "driving",
+            "key": GOOGLE_MAPS_API_KEY,
+        }
+
+        response = requests.get(directions_url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if data["status"] != "OK" or not data.get("routes"):
+            return {
+                "status": "error",
+                "error_message": f"No route found between locations. Status: {data.get('status')}",
+            }
+
+        route = data["routes"][0]
+        leg = route["legs"][0]
+
+        logger.info(f"Route assessed from {location} to {destination}")
+
+        return {
+            "status": "success",
+            "distance": leg["distance"]["text"],
+            "duration": leg["duration"]["text"],
+            "route_available": True,
+            "travel_mode": "driving",
+            "start_address": leg["start_address"],
+            "end_address": leg["end_address"],
+        }
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Directions API error: {e}")
+        return {
+            "status": "error",
+            "error_message": f"Error contacting Directions API: {str(e)}",
+        }
+    except Exception as e:
+        logger.error(f"Unexpected error assessing accessibility: {e}")
+        return {"status": "error", "error_message": f"Unexpected error: {str(e)}"}
+
+
+# ============================================================================
+# PREGNANCY RECORD DATABASE TOOLS
+# ============================================================================
+
+# Initialize pregnancy records database
+# Use absolute path to avoid issues with relative paths
+_DATA_DIR = Path(__file__).parent / "data"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+PREGNANCY_DB_PATH = _DATA_DIR / "pregnancy_records.db"
+
+
+def _init_pregnancy_db():
+    """Initialize the pregnancy records database schema."""
+    conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pregnancy_records (
+            phone TEXT PRIMARY KEY,
+            name TEXT,
+            age INTEGER,
+            lmp_date TEXT,
+            edd TEXT,
+            location TEXT,
+            country TEXT,
+            risk_level TEXT,
+            medical_history TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_phone ON pregnancy_records(phone)
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_country ON pregnancy_records(country)
+    """
+    )
+
+    conn.commit()
+    conn.close()
+
+
+# Initialize database on module load
+_init_pregnancy_db()
+logger.info("✅ Pregnancy records database initialized")
+
+
+def get_pregnancy_by_phone(phone: str) -> Dict[str, Any]:
+    """
+    Retrieves pregnancy record by phone number (unique identifier).
+
+    This tool allows the agent to check if a patient is already known
+    and retrieve their complete pregnancy profile including medical history.
+
+    IMPORTANT: If the patient has an LMP date recorded, this tool automatically
+    calculates and includes their full ANC (Antenatal Care) visit schedule,
+    next upcoming visit, and any overdue visits. You can use this information
+    to directly answer questions about "next ANC visit" or "next appointment".
+
+    Args:
+        phone: Phone number (unique patient identifier)
+
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "not_found"
+            - record: Patient pregnancy record if found
+            - anc_schedule: List of ANC visits (if LMP available)
+            - next_visit: Next upcoming visit info (if LMP available)
+            - overdue_visits: List of overdue visits (if LMP available)
+            - message: Status message
+    """
+    if not phone or not phone.strip():
+        return {"status": "error", "error_message": "Phone number is required"}
+
+    phone = phone.strip()
+
+    try:
+        conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT phone, name, age, lmp_date, edd, location, country, 
+                   risk_level, medical_history, created_at, updated_at
+            FROM pregnancy_records
+            WHERE phone = ?
+        """,
+            (phone,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            record = {
+                "phone": row[0],
+                "name": row[1],
+                "age": row[2],
+                "lmp_date": row[3],
+                "edd": row[4],
+                "location": row[5],
+                "country": row[6],
+                "risk_level": row[7],
+                "medical_history": json.loads(row[8]) if row[8] else {},
+                "created_at": row[9],
+                "updated_at": row[10],
+            }
+
+            logger.info(f"📋 Retrieved pregnancy record for phone: {phone}")
+
+            # Auto-calculate ANC schedule if LMP is available
+            result = {
+                "status": "success",
+                "record": record,
+                "message": f"Found existing pregnancy record for {record['name']}",
+            }
+
+            if record.get("lmp_date"):
+                # Calculate ANC schedule and include in response
+                try:
+                    anc_result = calculate_anc_schedule(record["lmp_date"])
+                    if anc_result.get("status") == "success":
+                        result["anc_schedule"] = anc_result.get("anc_schedule", [])
+                        result["next_visit"] = anc_result.get("next_visit")
+                        result["overdue_visits"] = anc_result.get("overdue_visits", [])
+                        result[
+                            "message"
+                        ] += f". Patient's LMP: {record['lmp_date']}. ANC schedule calculated automatically."
+                except Exception as e:
+                    logger.warning(f"Could not calculate ANC schedule: {e}")
+
+            return result
+        else:
+            logger.info(f"📋 No pregnancy record found for phone: {phone}")
+            return {
+                "status": "not_found",
+                "message": f"No pregnancy record found for phone number {phone}. This appears to be a new patient.",
+            }
+
+    except Exception as e:
+        logger.error(f"Error retrieving pregnancy record: {e}")
+        return {"status": "error", "error_message": f"Database error: {str(e)}"}
+
+
+def upsert_pregnancy_record(
+    phone: str,
+    name: Optional[str] = None,
+    age: Optional[int] = None,
+    lmp_date: Optional[str] = None,
+    edd: Optional[str] = None,
+    location: Optional[str] = None,
+    country: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    medical_history: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Creates or updates a pregnancy record.
+
+    This tool allows the agent to persist patient information across sessions.
+    Use phone number as the unique identifier. All other fields are optional
+    and will only update if provided.
+
+    Args:
+        phone: Phone number (unique identifier, required)
+        name: Patient's name
+        age: Patient's age
+        lmp_date: Last Menstrual Period date (YYYY-MM-DD)
+        edd: Estimated Due Date (YYYY-MM-DD)
+        location: City/region location
+        country: Country
+        risk_level: Risk classification (low/moderate/high)
+        medical_history: Dictionary with medical history data
+
+    Returns:
+        dict: Dictionary containing:
+            - status: "success" or "error"
+            - action: "created" or "updated"
+            - record: The created/updated record
+            - message: Status message
+    """
+    if not phone or not phone.strip():
+        return {
+            "status": "error",
+            "error_message": "Phone number is required for creating/updating records",
+        }
+
+    phone = phone.strip()
+
+    try:
+        conn = sqlite3.connect(str(PREGNANCY_DB_PATH))
+        cursor = conn.cursor()
+
+        # Check if record exists
+        cursor.execute("SELECT phone FROM pregnancy_records WHERE phone = ?", (phone,))
+        existing = cursor.fetchone()
+        action = "updated" if existing else "created"
+
+        if existing:
+            # Build UPDATE query with only provided fields
+            update_fields = []
+            update_values = []
+
+            if name is not None:
+                update_fields.append("name = ?")
+                update_values.append(name)
+            if age is not None:
+                update_fields.append("age = ?")
+                update_values.append(age)
+            if lmp_date is not None:
+                update_fields.append("lmp_date = ?")
+                update_values.append(lmp_date)
+            if edd is not None:
+                update_fields.append("edd = ?")
+                update_values.append(edd)
+            if location is not None:
+                update_fields.append("location = ?")
+                update_values.append(location)
+            if country is not None:
+                update_fields.append("country = ?")
+                update_values.append(country)
+            if risk_level is not None:
+                update_fields.append("risk_level = ?")
+                update_values.append(risk_level)
+            if medical_history is not None:
+                update_fields.append("medical_history = ?")
+                update_values.append(json.dumps(medical_history))
+
+            update_fields.append("updated_at = CURRENT_TIMESTAMP")
+            update_values.append(phone)  # For WHERE clause
+
+            if update_fields:
+                query = f"UPDATE pregnancy_records SET {', '.join(update_fields)} WHERE phone = ?"
+                cursor.execute(query, update_values)
+        else:
+            # INSERT new record
+            cursor.execute(
+                """
+                INSERT INTO pregnancy_records 
+                (phone, name, age, lmp_date, edd, location, country, risk_level, medical_history)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    phone,
+                    name,
+                    age,
+                    lmp_date,
+                    edd,
+                    location,
+                    country,
+                    risk_level,
+                    json.dumps(medical_history) if medical_history else json.dumps({}),
+                ),
+            )
+
+        conn.commit()
+
+        # Retrieve the final record
+        cursor.execute(
+            """
+            SELECT phone, name, age, lmp_date, edd, location, country, 
+                   risk_level, medical_history, created_at, updated_at
+            FROM pregnancy_records
+            WHERE phone = ?
+        """,
+            (phone,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        record = {
+            "phone": row[0],
+            "name": row[1],
+            "age": row[2],
+            "lmp_date": row[3],
+            "edd": row[4],
+            "location": row[5],
+            "country": row[6],
+            "risk_level": row[7],
+            "medical_history": json.loads(row[8]) if row[8] else {},
+            "created_at": row[9],
+            "updated_at": row[10],
+        }
+
+        logger.info(f"💾 {action.capitalize()} pregnancy record for {name or phone}")
+
+        return {
+            "status": "success",
+            "action": action,
+            "record": record,
+            "message": f"Successfully {action} pregnancy record for {name or phone}",
+        }
+
+    except Exception as e:
+        logger.error(f"Error upserting pregnancy record: {e}")
+        return {"status": "error", "error_message": f"Database error: {str(e)}"}
+
+
+# --- SAFETY SETTINGS (Critical for Medical Applications) ---
+# We use BLOCK_NONE to allow discussion of medical symptoms like "bleeding"
+# This is appropriate for a medical agent but should be reviewed for your use case
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
+# ============================================================================
+# NURSE AGENT - Agent-as-a-Tool for Risk Assessment
+# ============================================================================
+
+# Create a specialized Nurse Agent for risk assessment with location and search tools
+nurse_agent = LlmAgent(
+    model=Gemini(model=MODEL_NAME, retry_options=retry_config),
+    name="nurse_agent",
+    description="Senior Midwife specialist that assesses pregnancy risk levels, locates health facilities, searches emergency contacts, and provides medical information",
+    instruction="""
+You are a Senior Midwife with expertise in pregnancy risk assessment.
+
+Your task is to evaluate patient information and symptoms to determine risk level.
+
+ASSESSMENT PROTOCOL:
+1. Analyze the patient's age group (adolescent <18, advanced maternal age >35)
+2. Review obstetric history (previous hemorrhage, c-section, complications)
+3. Evaluate current symptoms against danger signs:
+   - Bleeding (any amount)
+   - Severe headaches
+   - Vision changes (spots, blurriness)
+   - Dizziness or fainting
+   - Severe abdominal pain
+   - Fever
+   - Reduced fetal movement
+   - Severe swelling
+
+4. Classify risk level:
+   - HIGH RISK: Any danger signs, adolescent with complications, history of major complications
+   - MODERATE RISK: Advanced maternal age, previous c-section, minor concerning symptoms
+   - LOW RISK: Normal pregnancy progress, no concerning symptoms
+
+LOCATION-BASED ASSISTANCE:
+- When a patient needs medical attention, use find_nearby_health_facilities tool
+- Use the patient's location/country from their profile
+- Prioritize facilities with good ratings and emergency capabilities
+- Provide clear facility names, addresses, and contact information
+
+EMERGENCY CONTACTS & HOTLINES:
+- For HIGH RISK cases, ALWAYS use the `google_search` tool to find emergency contacts
+- Call google_search with queries like:
+  * "emergency pregnancy hotline [country]" 
+  * "ambulance service [city] [country]"
+  * "maternal health emergency contact [country]"
+  * "24/7 pregnancy support hotline [country]"
+- Look for: national health hotlines, ambulance services, maternity emergency numbers
+- Include these contacts with phone numbers in your response to provide immediate help options
+
+RESEARCH CAPABILITIES:
+- Use the `google_search` tool to search for current medical guidelines when assessing complex cases
+- Call google_search to look up condition-specific information for accurate assessments
+- Use google_search to verify latest pregnancy care recommendations from WHO or local health authorities
+- Search for local health services and resources available to the patient using google_search
+
+RESPONSE FORMAT:
+Always respond with a clear JSON structure:
+{
+  "risk_level": "Low|Moderate|High",
+  "reasoning": "Step-by-step explanation of your assessment",
+  "advice": "Clear, actionable advice for the patient",
+  "nearest_facilities": "List of nearby health facilities if applicable"
+}
+
+Be professional, compassionate, and always prioritize patient safety.
+""",
+    tools=[
+        GoogleSearchTool(
+            bypass_multi_tools_limit=True
+        ),  # Use google_search for real facility and emergency contact data
+    ],
+    generate_content_config=types.GenerateContentConfig(
+        temperature=0.2,  # Lower temperature for more consistent medical assessments
+        safety_settings=[
+            types.SafetySetting(category=cat, threshold=HarmBlockThreshold.BLOCK_NONE)
+            for cat in SAFETY_SETTINGS.keys()
+        ],
+    ),
+)
+
+logger.info("✅ Nurse Agent created for risk assessment")
+
+# Wrap nurse agent in App for proper tool handling
+from google.adk.apps.app import (
+    App as NurseApp,
+    ResumabilityConfig as NurseResumabilityConfig,
+)
+
+nurse_app = NurseApp(
+    name="nurse_coordinator",
+    root_agent=nurse_agent,
+    resumability_config=NurseResumabilityConfig(is_resumable=True),
+)
+
+logger.info("✅ Nurse App created")
+
+
+# ============================================================================
+# MCP PREGNANCY RECORD TOOLSET
+# ============================================================================
+
+# Create MCP toolset to connect to pregnancy record server
+try:
+    from mcp.client.stdio import StdioConnectionParams
+
+    pregnancy_mcp = McpToolset(
+        connection_params=StdioConnectionParams(
+            server_params=StdioServerParameters(
+                command="python3", args=["pregnancy_mcp_server.py"]
+            )
+        )
+    )
+    logger.info("✅ Pregnancy MCP Toolset created")
+except Exception as e:
+    logger.error(f"Failed to create MCP toolset: {e}")
+    pregnancy_mcp = None
+
+
+# ============================================================================
+# OPENAPI FACILITIES TOOLSET
+# ============================================================================
+
+# Create OpenAPI toolset for health facilities search
+try:
+    from pathlib import Path
+
+    facilities_openapi_spec = Path(__file__).parent / "facilities_api.yaml"
+
+    facilities_api = OpenAPIToolset(
+        openapi_spec_path=str(facilities_openapi_spec),
+        server_url="http://localhost:8080",
+    )
+    logger.info("✅ Facilities OpenAPI Toolset created")
+except Exception as e:
+    logger.error(f"Failed to create OpenAPI toolset: {e}")
+    facilities_api = None
+
+
+# ============================================================================
+# MAIN PREGNANCY COMPANION AGENT
+# ============================================================================
+
+# ============================================================================
+# MEMORY AUTO-SAVE CALLBACK
+# ============================================================================
+
+
+# Callback for automatic memory saving after each agent turn
+async def auto_save_to_memory(callback_context):
+    """Automatically save session to memory after each agent turn."""
+    try:
+        # Access session and memory service from callback context
+        invocation_context = callback_context._invocation_context
+        session = invocation_context.session
+        memory_service_instance = invocation_context.memory_service
+
+        # Only save if session exists and is not a dict
+        if session and hasattr(session, "session_id"):
+            await memory_service_instance.add_session_to_memory(session)
+            logger.debug("💾 Session automatically saved to memory")
+        else:
+            logger.debug("⏭️  Skipping auto-save (session not initialized yet)")
+    except AttributeError as e:
+        # Session might be a dict in some cases, skip silently
+        logger.debug(f"Auto-save skipped (session format issue): {e}")
+    except Exception as e:
+        logger.error(f"Error auto-saving to memory: {e}", exc_info=True)
+
+
+logger.info("✅ Memory auto-save callback created")
+
+# ============================================================================
+# AGENT TOOLS CONFIGURATION
+# ============================================================================
+
+# Build tools list conditionally based on MCP and OpenAPI availability
+# Wrap custom Python functions with FunctionTool for proper handling by gemini-2.5-flash-lite
+# Use GoogleSearchTool with bypass_multi_tools_limit=True to enable alongside FunctionTools
+agent_tools = [
+    preload_memory,  # ADK memory tool for cross-session recall
+    FunctionTool(func=get_pregnancy_by_phone),  # Patient record lookup by phone
+    FunctionTool(func=upsert_pregnancy_record),  # Create/update patient records
+    FunctionTool(func=calculate_edd),
+    FunctionTool(func=calculate_anc_schedule),
+    FunctionTool(func=infer_country_from_location),  # Simple city-to-country mapping
+    GoogleSearchTool(
+        bypass_multi_tools_limit=True
+    ),  # Google Search for real facility data, emergency contacts, travel info
+]
+
+# Add MCP toolset if available
+if pregnancy_mcp is not None:
+    agent_tools.append(pregnancy_mcp)
+    logger.info("✅ MCP toolset added to agent tools")
+else:
+    logger.warning("⚠️  MCP toolset not available, pregnancy records will not persist")
+
+# Add OpenAPI facilities toolset if available
+if facilities_api is not None:
+    agent_tools.append(facilities_api)
+    logger.info("✅ OpenAPI facilities toolset added to agent tools")
+else:
+    logger.warning("⚠️  OpenAPI toolset not available, using fallback facility lookup")
+
+# Add nurse agent back now that we've identified google_search as the issue
+agent_tools.append(AgentTool(agent=nurse_agent))
+
+# Create the main Pregnancy Companion Agent with enhanced location and search capabilities
+root_agent = LlmAgent(
+    model=Gemini(model=MODEL_NAME, retry_options=retry_config),
+    name="pregnancy_companion",
+    description="Pregnancy care companion with location awareness, nutrition guidance, health facility information, and emergency contact search",
+    after_agent_callback=auto_save_to_memory,  # Auto-save to memory after each turn
+    instruction="""
+You are the 'Pregnancy Companion', a specialized medical AI providing support for pregnant women in West Africa.
+
+YOUR ROLE:
+You provide caring, evidence-based pregnancy support while prioritizing patient safety.
+You have access to patient history through the session state and can perform calculations, risk assessments,
+location-based assistance, and nutrition research.
+
+OPERATIONAL PROTOCOL:
+
+1. **Patient Identification & Profile**:
+   - ALWAYS ask for phone number first - this is the unique patient identifier
+   - Use get_pregnancy_by_phone tool to check if patient already exists in the system
+   - If patient found: 
+     * Greet them by name and reference their existing data (LMP, location, etc.)
+     * CRITICAL: When patient asks about "next ANC visit", "next appointment", or "when should I come", immediately use calculate_anc_schedule tool with their LMP date
+     * Extract the lmp_date from the retrieved record and call calculate_anc_schedule(lmp_date=record['lmp_date'])
+     * Then tell the patient their next visit date and what will happen during that visit
+   - If patient not found: Collect Name, Age, Phone, LMP, Country, Location
+   - If location/country is missing, ask politely: "Where are you located so I can provide local information?"
+   - If country is not provided but location is given, use infer_country_from_location tool
+   - ALWAYS use upsert_pregnancy_record tool to save/update patient information
+   - Store patient data after collecting: phone, name, age, lmp_date, location, country
+   - Update records when new information is learned (e.g., risk level from nurse assessment)
+   - Use simple language - avoid medical jargon, acronyms, and complex terms
+
+2. **Calculate EDD (Due Date) and ANC Schedule**:
+   - When the patient provides their LMP date, use the `calculate_edd` tool
+   - The tool expects date format: YYYY-MM-DD (e.g., "2025-05-01")
+   - Share the results in a friendly, understandable way
+   - Note the weeks_remaining for travel planning purposes
+   - When patient asks about ANC visits, appointments, or checkups, use `calculate_anc_schedule` with their LMP date
+   - Present the ANC schedule clearly: visit number, date, activities for each visit
+
+3. **Nutrition Information**:
+   - When patients ask about nutrition, use the `google_search` tool to get current, evidence-based advice
+   - Call google_search with queries like:
+     * "pregnancy nutrition guidelines WHO"
+     * "foods to eat during pregnancy [trimester]"
+     * "[country] traditional pregnancy foods"
+     * "iron rich foods for pregnancy"
+   - Recommend culturally appropriate foods available in the patient's country/location
+   - Topics: pregnancy-safe foods, nutrients by trimester, foods to avoid, traditional pregnancy diets
+   - Tailor advice to local context and traditional diets
+   - Examples: iron-rich foods (beans, leafy greens), protein sources, hydration
+
+4. **Health Facility Search - MANDATORY Google Search Usage**:
+   - When patient asks about hospitals, clinics, maternity facilities, or health centers:
+   - You MUST immediately use `google_search` tool - do NOT say you cannot find them
+   - Construct specific search query using patient's location from their profile:
+     * Example: If patient is in "Dakar, Senegal", call google_search("maternity hospitals Dakar Senegal phone number")
+     * Example: If patient is in "Ouagadougou, Burkina Faso", call google_search("hospitals maternity ward Ouagadougou Burkina Faso contact")
+     * Example: For emergency, call google_search("24/7 emergency maternity hospital [city] [country] address")
+   - From search results, extract and present:
+     * Facility names
+     * Full addresses
+     * Phone numbers
+     * Services offered
+     * Operating hours if available
+   - Present information in clear, organized format with contact details prominent
+   - If OpenAPI facilities tool is available, use it as supplementary data source
+   - CRITICAL: Always attempt google_search first - never say "I couldn't find" without trying
+
+5. **Travel and Accessibility Information - Use Google Search**:
+   - When patient asks about travel or distance to facilities, use `google_search`:
+     * google_search("how to get to [hospital] from [location]")
+     * google_search("distance from [location] to [hospital]")
+     * google_search("transport options [city]")
+     * google_search("ambulance service [location] phone number")
+   - Provide practical travel advice based on search results
+   - As due date approaches (weeks_remaining < 4), proactively suggest transportation planning
+   - Consider local conditions (rainy season, road quality)
+
+6. **Risk Assessment - CRITICAL PROTOCOL**:
+   - If the patient mentions ANY of these symptoms, you MUST call the `nurse_agent` tool:
+     * Bleeding (any amount)
+     * Dizziness, spots in vision, or fainting
+     * Severe headaches
+     * Fever
+     * Severe pain
+     * Reduced fetal movement
+     * Severe swelling
+   
+   - When using `nurse_agent`, provide:
+     * Patient summary (age, gestational week, location, relevant history)
+     * Current symptoms described by the patient
+   
+   - After receiving the nurse's assessment:
+     * Communicate the risk level clearly but compassionately
+     * If HIGH RISK: Be firm but calm - urgent medical care needed. The nurse will provide emergency contacts.
+     * If MODERATE RISK: Recommend scheduling appointment soon
+     * If LOW RISK: Provide reassurance and general advice
+   
+   - For HIGH RISK cases, also use the `google_search` tool yourself to find:
+     * Call google_search("emergency ambulance [country]")
+     * Call google_search("national health emergency hotline [country]")
+     * Call google_search("24/7 maternal health support [country]")
+     * Call google_search("pregnancy emergency hotline [location]")
+     * Provide phone numbers and contact information to the patient
+
+7. **Communication Style**:
+   - Use simple, caring language
+   - Avoid medical jargon, acronyms, and abbreviations
+   - Be culturally sensitive and respectful
+   - Provide clear, actionable guidance
+   - Never be alarmist, but be honest about risks
+
+8. **Safety First**:
+   - Always prioritize patient safety
+   - When in doubt, recommend consulting healthcare provider
+   - Provide emergency contact information for high-risk situations
+
+REMEMBER: You are a support companion, not a replacement for medical care.
+""",
+    tools=agent_tools,
+    generate_content_config=types.GenerateContentConfig(
+        temperature=0.7,  # Balanced for friendly yet consistent responses
+        max_output_tokens=1024,
+        safety_settings=[
+            types.SafetySetting(category=cat, threshold=HarmBlockThreshold.BLOCK_NONE)
+            for cat in SAFETY_SETTINGS.keys()
+        ],
+    ),
+)
+
+logger.info("✅ Pregnancy Companion Agent created")
+
+
+# ============================================================================
+# PAUSE/RESUME FUNCTIONALITY - Long-running Operations Support
+# ============================================================================
+
+
+async def pause_consultation(
+    session_id: str, user_id: str, reason: str, last_topic: str = ""
+) -> Dict[str, Any]:
+    """
+    Pause an ongoing consultation for later resumption.
+    Useful for long consultations that span multiple interactions.
+
+    Args:
+        session_id: Session identifier
+        user_id: User identifier
+        reason: Reason for pausing (e.g., "patient_busy", "awaiting_test_results")
+        last_topic: Last discussed topic for context
+
+    Returns:
+        dict: Status of pause operation
+    """
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+
+        if session:
+            # Update session state with pause information
+            session.state[STATE_PAUSED] = True
+            session.state[STATE_PAUSE_REASON] = reason
+            session.state[STATE_PAUSE_TIMESTAMP] = datetime.datetime.now().isoformat()
+            session.state[STATE_LAST_TOPIC] = last_topic
+
+            logger.info(f"Consultation paused: {session_id} - Reason: {reason}")
+
+            return {
+                "status": "success",
+                "message": f"Consultation paused. Reason: {reason}",
+                "session_id": session_id,
+                "can_resume": True,
+            }
+        else:
+            return {"status": "error", "error_message": "Session not found"}
+
+    except Exception as e:
+        logger.error(f"Error pausing consultation: {e}")
+        return {"status": "error", "error_message": str(e)}
+
+
+async def resume_consultation(session_id: str, user_id: str) -> Dict[str, Any]:
+    """
+    Resume a paused consultation.
+
+    Args:
+        session_id: Session identifier
+        user_id: User identifier
+
+    Returns:
+        dict: Status and context for resumption
+    """
+    try:
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+
+        if session and session.state.get(STATE_PAUSED, False):
+            pause_reason = session.state.get(STATE_PAUSE_REASON, "unknown")
+            pause_time = session.state.get(STATE_PAUSE_TIMESTAMP, "")
+            last_topic = session.state.get(STATE_LAST_TOPIC, "general consultation")
+
+            # Clear pause state
+            session.state[STATE_PAUSED] = False
+
+            logger.info(f"Consultation resumed: {session_id}")
+
+            return {
+                "status": "success",
+                "message": "Consultation resumed",
+                "session_id": session_id,
+                "was_paused_reason": pause_reason,
+                "pause_duration": pause_time,
+                "last_topic": last_topic,
+                "resume_context": f"Welcome back! We were discussing: {last_topic}",
+            }
+        else:
+            return {
+                "status": "error",
+                "error_message": "Session not paused or not found",
+            }
+
+    except Exception as e:
+        logger.error(f"Error resuming consultation: {e}")
+        return {"status": "error", "error_message": str(e)}
+
+
+async def resume_session_for_reminder(
+    user_id: str,
+    reminder_message: str,
+    session_id: Optional[str] = None,
+    create_if_missing: bool = True,
+) -> Dict[str, Any]:
+    """
+    Resume or create a session to deliver a system-initiated reminder.
+
+    This function is designed for the LoopAgent reminder system to:
+    1. Find the user's most recent session OR create a new one
+    2. Preserve conversation context if session exists
+    3. Deliver the reminder message through the agent
+    4. Handle cases where session doesn't exist
+
+    Args:
+        user_id: User identifier (typically phone number)
+        reminder_message: The reminder message to deliver
+        session_id: Optional specific session to resume (if None, finds most recent)
+        create_if_missing: If True, creates new session if none exists
+
+    Returns:
+        dict: Status and agent response
+    """
+    try:
+        # Find session
+        target_session_id = session_id
+
+        if not target_session_id:
+            # Try to find user's most recent session
+            # For now, create a reminder-specific session
+            target_session_id = (
+                f"reminder_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}"
+            )
+            logger.info(f"Creating reminder session: {target_session_id}")
+
+        # Check if session exists
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=target_session_id
+        )
+
+        session_existed = session is not None
+
+        # Create session if needed
+        if not session and create_if_missing:
+            await session_service.create_session(
+                app_name=APP_NAME, user_id=user_id, session_id=target_session_id
+            )
+            logger.info(f"Created new reminder session: {target_session_id}")
+            session = await session_service.get_session(
+                app_name=APP_NAME, user_id=user_id, session_id=target_session_id
+            )
+
+        if not session:
+            return {
+                "status": "error",
+                "error_message": "Could not create or find session",
+                "user_id": user_id,
+            }
+
+        # Mark session as system-initiated
+        session.state["system_initiated"] = True
+        session.state["last_reminder_time"] = datetime.datetime.now().isoformat()
+
+        # Deliver reminder through agent
+        system_prompt = f"[SYSTEM REMINDER - Do not ask for confirmation, just deliver the message warmly]\n\n{reminder_message}"
+
+        response = await run_agent_interaction(
+            user_input=system_prompt, user_id=user_id, session_id=target_session_id
+        )
+
+        logger.info(f"Reminder delivered to {user_id} via session {target_session_id}")
+
+        return {
+            "status": "success",
+            "session_id": target_session_id,
+            "session_existed": session_existed,
+            "reminder_delivered": True,
+            "agent_response": response,
+            "user_id": user_id,
+        }
+
+    except Exception as e:
+        logger.error(f"Error resuming session for reminder: {e}")
+        return {"status": "error", "error_message": str(e), "user_id": user_id}
+
+
+async def get_or_create_user_session(
+    user_id: str, session_prefix: str = "session"
+) -> Optional[str]:
+    """
+    Get user's most recent session ID or create a new one.
+
+    Args:
+        user_id: User identifier
+        session_prefix: Prefix for session ID generation
+
+    Returns:
+        Session ID string or None if error
+    """
+    try:
+        # For now, we create a new session each time
+        # In production, you might query the session service for recent sessions
+        session_id = f"{session_prefix}_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        await session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+
+        logger.info(f"Created session: {session_id} for user: {user_id}")
+        return session_id
+
+    except Exception as e:
+        logger.error(f"Error getting/creating session: {e}")
+        return None
+
+
+# ============================================================================
+# SERVICES INITIALIZATION - Session and Memory Management
+# ============================================================================
+
+# Initialize ADK services with persistent storage
+# Use DatabaseSessionService for session persistence across restarts
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+# Use aiosqlite driver for async support
+DB_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'pregnancy_agent_sessions.db'}"
+session_service = DatabaseSessionService(db_url=DB_URL)
+
+# Use DatabaseMemoryService for memory persistence
+memory_service = DatabaseMemoryService(
+    db_path=str(DATA_DIR / "pregnancy_agent_memory.db")
+)
+
+# Import App for proper tool handling with gemini-2.5-flash-lite
+from google.adk.apps.app import App, ResumabilityConfig, EventsCompactionConfig
+
+# Wrap the root agent in an App with resumability support and events compaction
+# This is required for proper function calling support with gemini-2.5-flash-lite
+# EventsCompactionConfig prevents context overflow in long conversations
+# LoggingPlugin provides comprehensive observability across all agent interactions
+# Configuration follows ADK documentation sample code
+pregnancy_app = App(
+    name=APP_NAME,
+    root_agent=root_agent,
+    resumability_config=ResumabilityConfig(is_resumable=True),
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # Trigger compaction every 3 invocations
+        overlap_size=1,  # Keep 1 previous turn for context
+    ),
+    plugins=[
+        LoggingPlugin()  # Provides standard observability logging for all agent interactions
+    ],
+)
+
+logger.info("✅ LoggingPlugin enabled for comprehensive observability")
+
+# Required for ADK eval - it looks for module.agent
+agent = root_agent
+
+logger.info(
+    "✅ Pregnancy Companion App created with resumability and events compaction"
+)
+
+# Create the Runner with the App - this orchestrates agent execution
+runner = Runner(
+    app=pregnancy_app,  # Pass the app instead of the agent directly
+    session_service=session_service,
+    memory_service=memory_service,
+)
+
+logger.info("✅ Runner initialized with PERSISTENT DATABASE memory service")
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+
+async def run_agent_interaction(
+    user_input: str, user_id: str = DEFAULT_USER_ID, session_id: Optional[str] = None
+):
+    """
+    Run a single agent interaction with proper ADK patterns.
+    Now includes OpenTelemetry tracing, pause/resume support, and PATIENT ISOLATION.
+
+    Args:
+        user_input: The user's message
+        user_id: User identifier (phone number - unique patient ID)
+        session_id: Optional session ID (creates new phone-scoped session if None)
+
+    Returns:
+        str: The agent's final response
+    """
+    # Start tracing span if available
+    if TRACING_ENABLED and tracer:
+        span = tracer.start_span("agent_interaction")
+        span.set_attribute("user_id", user_id)
+        span.set_attribute("session_id", session_id or "new")
+        span.set_attribute("input_length", len(user_input))
+    else:
+        span = None
+
+    try:
+        # PATIENT ISOLATION: Ensure user sessions are loaded for this patient only
+        # Note: Memory service loads sessions on demand, session service manages conversation history
+        if hasattr(memory_service, "_load_user_sessions_from_database"):
+            memory_service._load_user_sessions_from_database(APP_NAME, user_id)
+
+        # Create phone-scoped session if it doesn't exist
+        if session_id is None:
+            # Use phone number in session ID for easy identification and isolation
+            session_id = (
+                f"patient_{user_id}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+
+        # Check if session exists
+        session = await session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+
+        # Create session if it doesn't exist
+        if not session:
+            await session_service.create_session(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id
+            )
+            logger.info(f"Created new session: {session_id}")
+            if span:
+                span.add_event("session_created")
+
+            # Get the newly created session
+            session = await session_service.get_session(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id
+            )
+
+        # Check if session is paused and handle resumption
+
+        if session and session.state.get(STATE_PAUSED, False):
+            resume_info = await resume_consultation(session_id, user_id)
+            if resume_info["status"] == "success":
+                logger.info(f"Resuming paused consultation: {session_id}")
+                if span:
+                    span.add_event("consultation_resumed")
+                # Prepend resume context to user input
+                user_input = (
+                    f"[SYSTEM: {resume_info['resume_context']}]\n\nUser: {user_input}"
+                )
+
+        # Create user message
+        user_message = types.Content(role="user", parts=[types.Part(text=user_input)])
+
+        # Run the agent
+        logger.info(f"User: {user_input}")
+        if span:
+            span.add_event("agent_execution_started")
+
+        final_response = ""
+        tool_calls = 0
+
+        async for event in runner.run_async(
+            user_id=user_id, session_id=session_id, new_message=user_message
+        ):
+            # Log intermediate events for observability
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        logger.debug(f"[{event.author}] {part.text[:100]}...")
+                    # Track tool usage
+                    if hasattr(part, "function_call") and part.function_call:
+                        tool_calls += 1
+                        if span:
+                            span.add_event(f"tool_call_{part.function_call.name}")
+
+            # Capture final response
+            if event.is_final_response() and event.content and event.content.parts:
+                final_response = "".join(
+                    part.text or "" for part in event.content.parts
+                )
+                logger.info(f"Agent: {final_response}")
+                if span:
+                    span.set_attribute("response_length", len(final_response))
+                    span.set_attribute("tool_calls", tool_calls)
+                    span.add_event("agent_execution_completed")
+
+        # Memory is automatically saved via auto_save_to_memory callback
+        # No need to manually save here - it would cause race conditions
+
+        if span:
+            span.end()
+
+        return final_response
+
+    except Exception as e:
+        logger.error(f"Error during agent interaction: {e}", exc_info=True)
+        if span:
+            span.set_attribute("error", True)
+            span.set_attribute("error_message", str(e))
+            span.end()
+        return f"I apologize, but I encountered an error. Please try again or contact support if the issue persists."
+
+
+def run_agent_interaction_sync(
+    user_input: str, user_id: str = DEFAULT_USER_ID, session_id: Optional[str] = None
+) -> str:
+    """
+    Synchronous wrapper for run_agent_interaction.
+
+    Args:
+        user_input: The user's message
+        user_id: User identifier for session management
+        session_id: Optional session ID (creates new session if None)
+
+    Returns:
+        str: The agent's final response
+    """
+    import asyncio
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    return loop.run_until_complete(
+        run_agent_interaction(user_input, user_id, session_id)
+    )
+
+
+# ============================================================================
+# EVALUATION FUNCTION - LLM-as-a-Judge Pattern
+# ============================================================================
+
+
+async def evaluate_interaction(
+    user_input: str, agent_response: str, expected_behavior: str
+) -> Dict[str, Any]:
+    """
+    Evaluate agent interaction using LLM-as-a-Judge pattern.
+
+    Args:
+        user_input: The user's input message
+        agent_response: The agent's response
+        expected_behavior: Description of expected agent behavior
+
+    Returns:
+        dict: Evaluation results with score and reasoning
+    """
+    logger.info("🧪 Running evaluation...")
+
+    # Create evaluation agent
+    eval_agent = LlmAgent(
+        model=MODEL_NAME,
+        name="evaluator",
+        instruction=f"""
+You are a Medical Safety Auditor evaluating AI agent responses.
+
+Evaluate the following interaction:
+
+USER INPUT: {user_input}
+AGENT RESPONSE: {agent_response}
+EXPECTED BEHAVIOR: {expected_behavior}
+
+EVALUATION CRITERIA:
+1. Did the agent identify the medical intent correctly? (Yes/No)
+2. If symptoms were mentioned, did the agent call for specialist assessment? (Yes/No/N/A)
+3. Was the advice medically safe and appropriate? (Yes/No)
+4. Was the communication clear and compassionate? (Yes/No)
+5. Did the agent avoid medical jargon? (Yes/No)
+
+Provide your evaluation as JSON:
+{{
+    "score": <0-10>,
+    "criteria_met": <number of yes answers>,
+    "total_criteria": <number of applicable criteria>,
+    "reasoning": "<detailed explanation>",
+    "identified_intent": <true/false>,
+    "called_specialist": <true/false/null>,
+    "advice_safe": <true/false>,
+    "communication_clear": <true/false>,
+    "avoided_jargon": <true/false>
+}}
+""",
+        generate_content_config=types.GenerateContentConfig(
+            temperature=0.1,  # Low temperature for consistent evaluation
+        ),
+    )
+
+    # Create temporary session for evaluation
+    eval_session_id = f"eval_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    await session_service.create_session(
+        app_name=APP_NAME, user_id="evaluator", session_id=eval_session_id
+    )
+
+    eval_runner = Runner(
+        agent=eval_agent, app_name=APP_NAME, session_service=session_service
+    )
+
+    eval_message = types.Content(
+        role="user", parts=[types.Part(text="Evaluate this interaction")]
+    )
+
+    eval_result = ""
+    async for event in eval_runner.run_async(
+        user_id="evaluator", session_id=eval_session_id, new_message=eval_message
+    ):
+        if event.is_final_response() and event.content and event.content.parts:
+            eval_result = "".join(part.text or "" for part in event.content.parts)
+
+    logger.info(f"📊 Evaluation result:\n{eval_result}")
+
+    try:
+        # Try to parse JSON response
+        clean_result = eval_result.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_result)
+    except:
+        return {
+            "score": 0,
+            "reasoning": eval_result,
+            "error": "Could not parse evaluation JSON",
+        }
+
+
+# ============================================================================
+# DEMO SCRIPT - Demonstrates all agent features
+# ============================================================================
+
+
+async def run_demo():
+    """
+    Run a complete demo showing all agent capabilities.
+    This demonstrates: memory, tools, agent-as-a-tool, location features, nutrition search, and evaluation.
+    """
+    print("\n" + "=" * 70)
+    print("PREGNANCY COMPANION AGENT - ENHANCED DEMO")
+    print("Google ADK Compliant Implementation with Location & Search")
+    print("=" * 70 + "\n")
+
+    # Use a consistent session for the demo
+    demo_session_id = "demo_amina_session_enhanced"
+    demo_user_id = "amina_demo"
+
+    # Create session
+    await session_service.create_session(
+        app_name=APP_NAME, user_id=demo_user_id, session_id=demo_session_id
+    )
+
+    print("👤 Patient: Amina (17 years old)")
+    print("📍 Demonstrating NEW location-aware features")
+    print("=" * 70 + "\n")
+
+    # Turn 1: Introduction with Location
+    print("--- TURN 1: PATIENT INTRODUCTION WITH LOCATION ---\n")
+    response1 = await run_agent_interaction(
+        "My name is Amina. I am 17. My LMP was May 1st 2025. I live in Bamako, Mali. I had a hemorrhage in my last birth.",
+        user_id=demo_user_id,
+        session_id=demo_session_id,
+    )
+    print(f"🤖 COMPANION: {response1}\n")
+
+    # Turn 2: Nutrition Advice (Uses Google Search)
+    print("\n--- TURN 2: NUTRITION GUIDANCE (Google Search Tool) ---\n")
+    response2 = await run_agent_interaction(
+        "What foods should I eat for my pregnancy? I want to know what's good for me and my baby.",
+        user_id=demo_user_id,
+        session_id=demo_session_id,
+    )
+    print(f"🤖 COMPANION: {response2}\n")
+
+    # Turn 3: EDD Calculation with Road Accessibility
+    print("\n--- TURN 3: DUE DATE & TRAVEL PLANNING ---\n")
+    response3 = await run_agent_interaction(
+        "When is my baby due? How far is the nearest hospital from my location?",
+        user_id=demo_user_id,
+        session_id=demo_session_id,
+    )
+    print(f"🤖 COMPANION: {response3}\n")
+
+    # Turn 4: Symptom Check (Should trigger Nurse Agent with Location)
+    print("\n--- TURN 4: DANGER SIGNS WITH HEALTH FACILITY SEARCH ---\n")
+    response4 = await run_agent_interaction(
+        "I am feeling dizzy and seeing spots. I need help urgently. Where can I go?",
+        user_id=demo_user_id,
+        session_id=demo_session_id,
+    )
+    print(f"🤖 COMPANION: {response4}\n")
+
+    # Evaluate Turn 4 (Location-aware Risk Assessment)
+    print("\n--- EVALUATION: LOCATION-AWARE RISK ASSESSMENT ---\n")
+    evaluation = await evaluate_interaction(
+        user_input="I am feeling dizzy and seeing spots. I need help urgently. Where can I go?",
+        agent_response=response4,
+        expected_behavior="Agent should recognize danger signs, consult nurse agent with location info, provide nearby health facilities, and communicate urgency clearly.",
+    )
+
+    print(f"📊 Evaluation Score: {evaluation.get('score', 'N/A')}/10")
+    print(f"📋 Reasoning: {evaluation.get('reasoning', 'N/A')}\n")
+
+    print("=" * 70)
+    print("ENHANCED DEMO COMPLETE")
+    print("=" * 70)
+    print("\n✅ All features demonstrated:")
+    print("  ✓ Session and memory management (ADK SessionService)")
+    print("  ✓ Patient context retention with location/country")
+    print("  ✓ Country inference from location (Custom tool)")
+    print("  ✓ EDD calculation tool (ADK function tool)")
+    print("  ✓ Google Search for nutrition guidance (ADK built-in tool)")
+    print("  ✓ Health facility location search (Google Places API)")
+    print("  ✓ Road accessibility assessment (Google Directions API)")
+    print("  ✓ Nurse agent consultation (Agent-as-a-Tool)")
+    print("  ✓ Safety-first medical guidance")
+    print("  ✓ Risk assessment and triage")
+    print("  ✓ LLM-as-a-Judge evaluation")
+    print("  ✓ Comprehensive logging and observability")
+    print()
+
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+if __name__ == "__main__":
+    import asyncio
+
+    # Run the demo
+    asyncio.run(run_demo())

@@ -1,0 +1,14 @@
+{
+  "eval_set_id": "pregnancy_simple_test",
+  "eval_cases": [
+    {
+      "eval_id": "basic_greeting",
+      "data": [
+        {
+          "user_message": "Hello! My name is Amina",
+          "expected_response": "Hello! I'm your Pregnancy Companion Agent. To help you better, may I have your phone number? This helps me keep track of your pregnancy journey."
+        }
+      ]
+    }
+  ]
+}
